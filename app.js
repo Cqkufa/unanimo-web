@@ -9,55 +9,59 @@ const CONF_COLORS=[CORAL,YEL,MINT,VIOLET,BLUE,PINK];
 /* ---------- avatar builder: skin tone + face features + optional hat, all cycled with arrows ---------- */
 const SKIN_TONES = ['#FFE0BD','#FFCD94','#EAC086','#C68642','#8D5524','#4A2C17'];
 const EYE_STYLES = ['normal','happy','wide','sleepy','wink'];
-const NOSE_STYLES = ['dot','triangle','button','none'];
 const MOUTH_STYLES = ['smile','grin','flat','smirk','surprised'];
-const HAT_EMOJIS = [null,'🧢','🎩','👑','🎓','🌸','🏴‍☠️'];
+const HAT_NAMES = ['Ninguno','Gorra','Corona','Lentes','Parche','Bigote','Cuernos','Pizza'];
 const AVATAR_TRAITS = [
   {key:'skin', label:'Piel', count:SKIN_TONES.length},
   {key:'eyes', label:'Ojos', count:EYE_STYLES.length},
-  {key:'nose', label:'Nariz', count:NOSE_STYLES.length},
   {key:'mouth', label:'Boca', count:MOUTH_STYLES.length},
-  {key:'hat', label:'Sombrero', count:HAT_EMOJIS.length},
+  {key:'hat', label:'Accesorio', count:HAT_NAMES.length},
 ];
 function randomAvatar(){
-  return { skin:Math.floor(Math.random()*SKIN_TONES.length), eyes:Math.floor(Math.random()*EYE_STYLES.length), nose:0, mouth:Math.floor(Math.random()*MOUTH_STYLES.length), hat:0 };
+  return { skin:Math.floor(Math.random()*SKIN_TONES.length), eyes:Math.floor(Math.random()*EYE_STYLES.length), mouth:Math.floor(Math.random()*MOUTH_STYLES.length), hat:0 };
 }
+// Pixel-art style: bold rectangular blocks with hard edges instead of
+// smooth curves, matching a chunky 8-bit avatar look. Everything is
+// crisp SVG (no raster images), so it scales cleanly from 20px chat
+// bubbles up to the 96px picker preview.
 function eyesSVG(style){
   switch(style){
-    case 'happy': return `<path d="M26,42 Q34,34 42,42" stroke="${INK}" stroke-width="4" fill="none" stroke-linecap="round"/><path d="M58,42 Q66,34 74,42" stroke="${INK}" stroke-width="4" fill="none" stroke-linecap="round"/>`;
-    case 'wide': return `<circle cx="34" cy="42" r="8" fill="#fff" stroke="${INK}" stroke-width="3"/><circle cx="34" cy="42" r="3" fill="${INK}"/><circle cx="66" cy="42" r="8" fill="#fff" stroke="${INK}" stroke-width="3"/><circle cx="66" cy="42" r="3" fill="${INK}"/>`;
-    case 'sleepy': return `<line x1="28" y1="42" x2="40" y2="42" stroke="${INK}" stroke-width="4" stroke-linecap="round"/><line x1="60" y1="42" x2="72" y2="42" stroke="${INK}" stroke-width="4" stroke-linecap="round"/>`;
-    case 'wink': return `<circle cx="34" cy="42" r="5" fill="${INK}"/><path d="M60,42 Q66,38 72,42" stroke="${INK}" stroke-width="4" fill="none" stroke-linecap="round"/>`;
-    default: return `<circle cx="34" cy="42" r="5" fill="${INK}"/><circle cx="66" cy="42" r="5" fill="${INK}"/>`;
-  }
-}
-function noseSVG(style){
-  switch(style){
-    case 'triangle': return `<path d="M46,48 L54,48 L50,58 Z" fill="${INK}"/>`;
-    case 'button': return `<path d="M46,50 Q50,58 54,50" stroke="${INK}" stroke-width="3" fill="none" stroke-linecap="round"/>`;
-    case 'none': return '';
-    default: return `<circle cx="50" cy="53" r="3" fill="${INK}"/>`;
+    case 'happy': return `<rect x="24" y="34" width="16" height="6" fill="${INK}"/><rect x="60" y="34" width="16" height="6" fill="${INK}"/>`;
+    case 'wide': return `<rect x="22" y="28" width="20" height="20" fill="#fff" stroke="${INK}" stroke-width="4"/><rect x="28" y="34" width="8" height="8" fill="${INK}"/><rect x="58" y="28" width="20" height="20" fill="#fff" stroke="${INK}" stroke-width="4"/><rect x="64" y="34" width="8" height="8" fill="${INK}"/>`;
+    case 'sleepy': return `<rect x="24" y="40" width="16" height="5" fill="${INK}"/><rect x="60" y="40" width="16" height="5" fill="${INK}"/>`;
+    case 'wink': return `<rect x="26" y="30" width="14" height="14" fill="${INK}"/><rect x="60" y="38" width="16" height="6" fill="${INK}"/>`;
+    default: return `<rect x="26" y="30" width="14" height="14" fill="${INK}"/><rect x="60" y="30" width="14" height="14" fill="${INK}"/>`;
   }
 }
 function mouthSVG(style){
   switch(style){
-    case 'grin': return `<path d="M34,62 Q50,80 66,62 Q50,70 34,62 Z" fill="#fff" stroke="${INK}" stroke-width="3"/>`;
-    case 'flat': return `<line x1="38" y1="66" x2="62" y2="66" stroke="${INK}" stroke-width="4" stroke-linecap="round"/>`;
-    case 'smirk': return `<path d="M38,64 Q50,68 62,60" stroke="${INK}" stroke-width="4" fill="none" stroke-linecap="round"/>`;
-    case 'surprised': return `<circle cx="50" cy="66" r="6" fill="#fff" stroke="${INK}" stroke-width="3"/>`;
-    default: return `<path d="M36,62 Q50,76 64,62" stroke="${INK}" stroke-width="4" fill="none" stroke-linecap="round"/>`;
+    case 'grin': return `<rect x="30" y="58" width="40" height="16" fill="${INK}"/><rect x="36" y="58" width="8" height="8" fill="#fff"/><rect x="56" y="58" width="8" height="8" fill="#fff"/>`;
+    case 'flat': return `<rect x="32" y="64" width="36" height="6" fill="${INK}"/>`;
+    case 'smirk': return `<rect x="32" y="60" width="10" height="6" fill="${INK}"/><rect x="42" y="64" width="10" height="6" fill="${INK}"/><rect x="52" y="68" width="16" height="6" fill="${INK}"/>`;
+    case 'surprised': return `<rect x="42" y="60" width="16" height="16" fill="${INK}"/>`;
+    default: return `<rect x="28" y="60" width="10" height="6" fill="${INK}"/><rect x="38" y="68" width="24" height="6" fill="${INK}"/><rect x="62" y="60" width="10" height="6" fill="${INK}"/>`;
+  }
+}
+function hatSVG(idx){
+  switch(idx){
+    case 1: return `<rect x="14" y="6" width="72" height="16" fill="${CORAL}" stroke="${INK}" stroke-width="4"/><rect x="52" y="4" width="34" height="16" fill="${CORAL}" stroke="${INK}" stroke-width="4"/>`;
+    case 2: return `<rect x="18" y="20" width="64" height="10" fill="${YEL}" stroke="${INK}" stroke-width="3"/><rect x="20" y="12" width="10" height="10" fill="${YEL}" stroke="${INK}" stroke-width="3"/><rect x="45" y="4" width="10" height="18" fill="${YEL}" stroke="${INK}" stroke-width="3"/><rect x="70" y="12" width="10" height="10" fill="${YEL}" stroke="${INK}" stroke-width="3"/>`;
+    case 3: return `<rect x="18" y="30" width="26" height="16" fill="${INK}"/><rect x="56" y="30" width="26" height="16" fill="${INK}"/><rect x="44" y="34" width="12" height="4" fill="${INK}"/>`;
+    case 4: return `<rect x="6" y="28" width="88" height="6" fill="${INK}"/><rect x="58" y="26" width="22" height="22" fill="${INK}"/>`;
+    case 5: return `<rect x="24" y="52" width="16" height="8" fill="${INK}"/><rect x="60" y="52" width="16" height="8" fill="${INK}"/><rect x="38" y="50" width="24" height="6" fill="${INK}"/>`;
+    case 6: return `<rect x="12" y="2" width="12" height="12" fill="${CORAL}" stroke="${INK}" stroke-width="3"/><rect x="22" y="14" width="8" height="8" fill="${CORAL}" stroke="${INK}" stroke-width="3"/><rect x="76" y="2" width="12" height="12" fill="${CORAL}" stroke="${INK}" stroke-width="3"/><rect x="70" y="14" width="8" height="8" fill="${CORAL}" stroke="${INK}" stroke-width="3"/>`;
+    case 7: return `<rect x="32" y="0" width="36" height="8" fill="${YEL}" stroke="${INK}" stroke-width="3"/><rect x="38" y="8" width="24" height="8" fill="${YEL}" stroke="${INK}" stroke-width="3"/><rect x="44" y="16" width="12" height="6" fill="${YEL}" stroke="${INK}" stroke-width="3"/><rect x="42" y="2" width="6" height="6" fill="${CORAL}"/><rect x="54" y="10" width="6" height="6" fill="${CORAL}"/>`;
+    default: return '';
   }
 }
 function avatarSVG(av, px){
   av = av || {};
   const skin = SKIN_TONES[av.skin||0] || SKIN_TONES[0];
-  const hat = HAT_EMOJIS[av.hat||0];
   return `<svg viewBox="0 0 100 100" width="${px}" height="${px}" style="display:block;overflow:visible;flex:0 0 auto">
     <circle cx="50" cy="52" r="44" fill="${skin}" stroke="${INK}" stroke-width="4"/>
     ${eyesSVG(EYE_STYLES[av.eyes||0])}
-    ${noseSVG(NOSE_STYLES[av.nose||0])}
     ${mouthSVG(MOUTH_STYLES[av.mouth||0])}
-    ${hat?`<text x="50" y="20" font-size="32" text-anchor="middle" dominant-baseline="middle">${hat}</text>`:''}
+    ${hatSVG(av.hat||0)}
   </svg>`;
 }
 
@@ -769,11 +773,12 @@ class Game {
     const previewSize = compact ? 76 : 96;
     const rows = AVATAR_TRAITS.map(t=>{
       const idx = av[t.key] || 0;
+      const valueLabel = t.key==='hat' ? HAT_NAMES[idx] : (idx+1)+'/'+t.count;
       return `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:${compact?7:9}px 0;border-top:2px solid var(--panel-line)">
-        <div style="font-weight:800;font-size:14px;width:70px;flex:0 0 auto">${t.label}</div>
+        <div style="font-weight:800;font-size:14px;width:76px;flex:0 0 auto">${t.label}</div>
         <div style="display:flex;align-items:center;gap:8px">
           <button data-action="avatarPrev" data-trait="${t.key}" data-count="${t.count}" aria-label="${t.label} anterior" style="width:32px;height:32px;border-radius:10px;border:2px solid ${INK};background:#fff;font-weight:800;font-size:15px;display:flex;align-items:center;justify-content:center">◀</button>
-          <div style="min-width:32px;text-align:center;font-weight:800;font-size:12px;color:var(--muted)">${idx+1}/${t.count}</div>
+          <div style="min-width:70px;text-align:center;font-weight:800;font-size:12px;color:var(--muted)">${valueLabel}</div>
           <button data-action="avatarNext" data-trait="${t.key}" data-count="${t.count}" aria-label="${t.label} siguiente" style="width:32px;height:32px;border-radius:10px;border:2px solid ${INK};background:#fff;font-weight:800;font-size:15px;display:flex;align-items:center;justify-content:center">▶</button>
         </div>
       </div>`;
