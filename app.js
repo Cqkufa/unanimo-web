@@ -6,6 +6,7 @@ const INK='#1D1B2F', CORAL='#FF6B4A', MINT='#2ED3A6', YEL='#FFC83D', VIOLET='#9B
 const PALETTE=[CORAL,VIOLET,MINT,YEL,BLUE,PINK];
 const RANKBG=[YEL,'#E4DEF5','#F6BE9E'];
 const CONF_COLORS=[CORAL,YEL,MINT,VIOLET,BLUE,PINK];
+const AVATAR_EMOJIS=['😎','🦄','🐙','🍕','🌵','🍦','🐸','🦩','🎲','🐳','🍉','🦀','🌈','⚡️','🎉','🐶'];
 
 const DIACRITICS_RE = new RegExp(String.fromCharCode(0x5b,0x5c,0x75,0x30,0x33,0x30,0x30,0x2d,0x5c,0x75,0x30,0x33,0x36,0x66,0x5d),'g');
 const norm = s => (s||'').trim().toLowerCase().normalize('NFD').replace(DIACRITICS_RE,'');
@@ -19,20 +20,47 @@ const clamp = (n,lo,hi) => Math.max(lo,Math.min(hi,n));
 
 const LS_KEY = 'unanimo:session';
 
+/* ---------- sound (synthesized, no audio files needed) ---------- */
+let audioCtx = null;
+function ensureAudio(){
+  if(!audioCtx){ const AC = window.AudioContext||window.webkitAudioContext; if(!AC) return null; audioCtx = new AC(); }
+  if(audioCtx.state === 'suspended') audioCtx.resume().catch(()=>{});
+  return audioCtx;
+}
+function beep(freq, duration, type, gainPeak, when){
+  const ctx = ensureAudio(); if(!ctx) return;
+  const osc = ctx.createOscillator(); const gain = ctx.createGain();
+  osc.type = type||'sine'; osc.frequency.value = freq;
+  const t0 = ctx.currentTime + (when||0);
+  gain.gain.setValueAtTime(0, t0);
+  gain.gain.linearRampToValueAtTime(gainPeak||0.08, t0+0.008);
+  gain.gain.exponentialRampToValueAtTime(0.0001, t0+duration);
+  osc.connect(gain).connect(ctx.destination);
+  osc.start(t0); osc.stop(t0+duration+0.02);
+}
+
 class Game {
-  constructor(root, toastRoot, modalRoot){
+  constructor(root, toastRoot, modalRoot, hudRoot, chatRoot){
     this.root = root;
     this.toastRoot = toastRoot;
     this.modalRoot = modalRoot;
+    this.hudRoot = hudRoot;
+    this.chatRoot = chatRoot;
     this.myId = null;
     this.channel = null;
     this.timers = [];
     this.confetti = Array.from({length:40},(_,i)=>({left:((i*37)%100)+'%',delay:((i%13)*0.23).toFixed(2)+'s',dur:(2.8+(i%5)*0.5)+'s',color:CONF_COLORS[i%6],w:(8+(i%3)*4)+'px',h:(12+(i%4)*3)+'px'}));
     this.local = { screen:'home', modal:null, cfgName:'', joinCode:'', joining:false, joinError:'', showJoinName:false, joinNameDraft:'',
-      inputs:[], submitted:false, reveal:0, appliedStage:-1, selPid:null, rankPhase:1, lastRound:-1 };
+      inputs:[], submitted:false, reveal:0, appliedStage:-1, selPid:null, rankPhase:1, lastRound:-1,
+      avatarEmoji: AVATAR_EMOJIS[Math.floor(Math.random()*AVATAR_EMOJIS.length)],
+      avatarColor: PALETTE[Math.floor(Math.random()*PALETTE.length)],
+      chatOpen:false, chatUnread:0, chatDraft:'' };
     this.cfgDraft = { players:8, rounds:3, words:6, time:45 };
     this.state = null; // host-authoritative shared state, once in a room
     this.toasts = [];
+    this.chatMessages = [];
+    this._knownPlayerIds = null;
+    this.soundOn = (localStorage.getItem('unanimo:sound') !== 'off');
     this._bindDelegation();
     this.renderScreen();
   }
@@ -40,6 +68,17 @@ class Game {
   /* ---------- lifecycle helpers ---------- */
   later(fn, ms){ const t=setTimeout(fn, ms); this.timers.push(t); return t; }
   clearTimers(){ this.timers.forEach(clearTimeout); this.timers=[]; clearInterval(this.tick); clearInterval(this.revealTick); clearInterval(this.hostWatch); }
+
+  /* ---------- sound ---------- */
+  playClick(){ if(!this.soundOn) return; beep(760, 0.05, 'sine', 0.05); }
+  playJoin(){ if(!this.soundOn) return; beep(660, 0.09, 'triangle', 0.09); beep(920, 0.13, 'triangle', 0.09, 0.09); }
+  playChat(){ if(!this.soundOn) return; beep(540, 0.06, 'sine', 0.05); }
+  toggleSound(){
+    this.soundOn = !this.soundOn;
+    try{ localStorage.setItem('unanimo:sound', this.soundOn?'on':'off'); }catch(e){}
+    if(this.soundOn) ensureAudio();
+    this.renderHud();
+  }
 
   toast(msg, color){
     const id = Math.random();
@@ -54,6 +93,7 @@ class Game {
   /* ---------- players / scoring (mirrors design logic) ---------- */
   players(){ return (this.state && this.state.players) || []; }
   playerById(id){ return this.players().find(p=>p.id===id); }
+  avatarInner(p){ return p && p.emoji ? esc(p.emoji) : esc(((p&&p.name)||'?').charAt(0).toUpperCase()); }
   groups(r){
     const a = this.state?.answers?.[r]; if(!a) return [];
     const m = {};
@@ -93,6 +133,7 @@ class Game {
     this.channel = supabase.channel('room-'+code, { config: { broadcast: { self:false, ack:false } } });
     this.channel.on('broadcast', {event:'state'}, ({payload})=> this.onState(payload));
     this.channel.on('broadcast', {event:'action'}, ({payload})=> { if(this.isHost) this.onAction(payload); });
+    this.channel.on('broadcast', {event:'chat'}, ({payload})=> this.onChatMessage(payload));
     await new Promise(resolve=>{
       this.channel.subscribe(status=>{ if(status==='SUBSCRIBED') resolve(); });
     });
@@ -121,7 +162,7 @@ class Game {
     const cfg = { ...this.cfgDraft };
     this.state = {
       code, hostId:this.myId, config:cfg,
-      players:[{id:this.myId, name, color:PALETTE[0], joinedAt:Date.now()}],
+      players:[{id:this.myId, name, color:this.local.avatarColor, emoji:this.local.avatarEmoji, joinedAt:Date.now()}],
       phase:'lobby', stage:0, round:-1, roundWord:'', roundEndAt:0, usedWords:[],
       answers:[], done:{}, rev:0, updatedAt:Date.now()
     };
@@ -152,7 +193,7 @@ class Game {
     this.renderScreen();
     try{
       await this.connect(code);
-      this.sendAction('join', { id:this.myId, name });
+      this.sendAction('join', { id:this.myId, name, color:this.local.avatarColor, emoji:this.local.avatarEmoji });
       this.later(()=>{
         if(this.local.joining){
           this.local.joining = false;
@@ -174,9 +215,12 @@ class Game {
       if(this.playerById(msg.id)) { this.broadcastState(); return; }
       const cap = this.state.config.players;
       if(this.state.players.length >= cap){ return; }
-      const color = PALETTE[this.state.players.length % PALETTE.length];
-      this.state.players.push({id:msg.id, name:(msg.name||'Jugador').slice(0,14), color, joinedAt:Date.now()});
-      this.toast(msg.name+' se unió', color);
+      const color = msg.color || PALETTE[this.state.players.length % PALETTE.length];
+      const emoji = msg.emoji || null;
+      this.state.players.push({id:msg.id, name:(msg.name||'Jugador').slice(0,14), color, emoji, joinedAt:Date.now()});
+      // No toast here — every client (host included) announces new joins
+      // uniformly from onState's roster diff, so everyone hears it, not
+      // just the host.
       this.broadcastState();
     }
     else if(msg.type === 'hello'){
@@ -232,6 +276,23 @@ class Game {
   onState(s, isSelf){
     const freshRoom = !this.state || this.state.code !== s.code;
     if(!freshRoom && this.state.rev != null && s.rev != null && s.rev < this.state.rev) return;
+
+    // Announce newly-seen players (sound + toast) to EVERY client, not just
+    // the host — diffed against a running roster so a guest who joins an
+    // already-populated lobby doesn't get toasts for people already there.
+    if(freshRoom){
+      this._knownPlayerIds = new Set((s.players||[]).map(p=>p.id));
+    } else {
+      const known = this._knownPlayerIds || new Set();
+      (s.players||[]).forEach(p=>{
+        if(!known.has(p.id)){
+          known.add(p.id);
+          if(p.id !== this.myId){ this.toast(p.name+' se unió', p.color); this.playJoin(); }
+        }
+      });
+      this._knownPlayerIds = known;
+    }
+
     this.state = s;
     if(this.local.joining){ this.local.joining=false; this.saveSession(); this.toast('Te uniste a la partida', PALETTE[0]); }
 
@@ -394,8 +455,75 @@ class Game {
     if(this.channel){ try{ if(this.myId) this.sendAction('leave', {id:this.myId}); supabase.removeChannel(this.channel); }catch(e){} this.channel=null; }
     this.clearSession();
     this.state = null; this.myId = null; this.isHost = false;
-    this.local = { ...this.local, screen:'home', modal:null, joinCode:'', joining:false, joinError:'', showJoinName:false };
+    this.chatMessages = []; this._knownPlayerIds = null;
+    this.local = { ...this.local, screen:'home', modal:null, joinCode:'', joining:false, joinError:'', showJoinName:false, chatOpen:false, chatUnread:0, chatDraft:'' };
     this.renderScreen();
+    this.renderHud();
+    this.renderChatPanel();
+  }
+
+  /* ---------- chat (peer-to-peer broadcast, never part of game state) ---------- */
+  onChatMessage(msg){
+    this.chatMessages = [...this.chatMessages.slice(-99), msg];
+    if(!this.local.chatOpen){ this.local.chatUnread++; this.renderHud(); }
+    this.playChat();
+    this.renderChatPanel();
+  }
+  sendChat(){
+    const text = (this.local.chatDraft||'').trim().slice(0,240);
+    if(!text || !this.state) return;
+    const me = this.playerById(this.myId);
+    const msg = { id:uid(), playerId:this.myId, name:(me&&me.name)||this.local.cfgName||'Vos', color:(me&&me.color)||this.local.avatarColor, emoji:(me&&me.emoji)||this.local.avatarEmoji, text, ts:Date.now() };
+    this.chatMessages = [...this.chatMessages.slice(-99), msg];
+    this.local.chatDraft = '';
+    this.send('chat', msg);
+    this.renderChatPanel();
+    this.later(()=>{ const el=this.chatRoot && this.chatRoot.querySelector('[data-role="chat-input"]'); if(el) el.focus(); }, 30);
+  }
+  toggleChat(){
+    this.local.chatOpen = !this.local.chatOpen;
+    if(this.local.chatOpen) this.local.chatUnread = 0;
+    this.renderChat();
+    if(this.local.chatOpen) this.later(()=>{ const el=this.chatRoot && this.chatRoot.querySelector('[data-role="chat-input"]'); if(el) el.focus(); }, 30);
+  }
+  renderChat(){ this.renderChatPanel(); this.renderHud(); }
+
+  renderHud(){
+    if(!this.hudRoot) return;
+    const soundBtn = `<button data-action="toggleSound" aria-label="Sonido" style="width:44px;height:44px;border-radius:50%;border:2px solid ${INK};background:#fff;box-shadow:0 3px 0 ${INK};display:flex;align-items:center;justify-content:center;font-size:18px">${this.soundOn?'🔊':'🔇'}</button>`;
+    let chatFab = '';
+    if(this.state){
+      const badge = this.local.chatUnread>0 ? `<div style="position:absolute;top:-4px;right:-4px;min-width:20px;height:20px;padding:0 5px;border-radius:999px;background:${CORAL};border:2px solid ${INK};color:${INK};font-size:11px;font-weight:800;display:flex;align-items:center;justify-content:center">${this.local.chatUnread>9?'9+':this.local.chatUnread}</div>` : '';
+      chatFab = `<div style="position:fixed;right:16px;bottom:16px;z-index:70">
+        <div style="position:relative">
+          <button data-action="toggleChat" aria-label="Chat" style="width:54px;height:54px;border-radius:50%;border:2.5px solid ${INK};background:${this.local.chatOpen?INK:CORAL};color:${this.local.chatOpen?'var(--cream)':INK};box-shadow:0 4px 0 ${INK};display:flex;align-items:center;justify-content:center;font-size:24px">${this.local.chatOpen?'✕':'💬'}</button>
+          ${badge}
+        </div>
+      </div>`;
+    }
+    this.hudRoot.innerHTML = `<div style="position:fixed;top:14px;right:16px;z-index:70">${soundBtn}</div>${chatFab}`;
+  }
+
+  renderChatPanel(){
+    if(!this.chatRoot) return;
+    if(!this.state || !this.local.chatOpen){ this.chatRoot.innerHTML=''; return; }
+    const rows = this.chatMessages.map(m=>{
+      const mine = m.playerId === this.myId;
+      return `<div style="display:flex;flex-direction:column;align-items:${mine?'flex-end':'flex-start'};gap:2px">
+        <div style="font-size:11px;font-weight:800;color:var(--muted);padding:0 4px">${mine?'Vos':esc(m.name)}</div>
+        <div style="max-width:78%;display:flex;align-items:center;gap:8px;padding:9px 13px;border-radius:16px;${mine?'border-bottom-right-radius:4px':'border-bottom-left-radius:4px'};background:${mine?CORAL:'#fff'};border:2px solid ${INK};font-size:15px;font-weight:600;overflow-wrap:anywhere">${m.emoji?`<span style="font-size:16px">${esc(m.emoji)}</span>`:''}<span>${esc(m.text)}</span></div>
+      </div>`;
+    }).join('') || `<div style="text-align:center;color:var(--muted);font-size:14px;font-weight:700;padding:20px 0">Todavía no hay mensajes. ¡Decí algo!</div>`;
+    this.chatRoot.innerHTML = `<div style="position:fixed;right:16px;bottom:80px;z-index:69;width:min(340px, calc(100vw - 32px));max-height:min(60vh, 460px);display:flex;flex-direction:column;background:var(--cream);border:2.5px solid ${INK};border-radius:22px;box-shadow:0 8px 0 ${INK};overflow:hidden;animation:pop .3s cubic-bezier(.3,1.5,.5,1) both">
+      <div style="padding:12px 16px;border-bottom:2px solid var(--line);font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:16px">Chat de la partida</div>
+      <div id="chatScroll" style="flex:1;min-height:120px;overflow-y:auto;padding:12px 14px;display:flex;flex-direction:column;gap:10px">${rows}</div>
+      <div style="display:flex;gap:8px;padding:10px;border-top:2px solid var(--line)">
+        <input data-role="chat-input" value="${esc(this.local.chatDraft)}" placeholder="Escribí algo…" autocomplete="off" style="flex:1;min-width:0;height:44px;border-radius:14px;border:2px solid ${INK};background:#fff;padding:0 14px;font-size:15px;font-weight:600;color:${INK};outline:none">
+        <button data-action="sendChat" aria-label="Enviar" style="flex:0 0 auto;width:44px;height:44px;border-radius:14px;border:2px solid ${INK};background:${INK};color:var(--cream);font-size:18px">➤</button>
+      </div>
+    </div>`;
+    const scroller = this.chatRoot.querySelector('#chatScroll');
+    if(scroller) scroller.scrollTop = scroller.scrollHeight;
   }
 
   /* ---------- event delegation ---------- */
@@ -406,6 +534,7 @@ class Game {
       const t = e.target.closest('[data-action]');
       if(!t) return;
       const action = t.dataset.action;
+      if(action !== 'stop') this.playClick();
       const fn = this.actions[action];
       if(fn) fn.call(this, t, e);
     });
@@ -420,11 +549,15 @@ class Game {
         this.patchWordMeta();
         this.queueDraft();
       }
+      // Chat draft is tracked quietly (no re-render) so typing never fights
+      // the user for cursor position — the panel only rebuilds on send/receive.
+      else if(t.dataset.role === 'chat-input'){ this.local.chatDraft = t.value.slice(0,240); }
     });
     document.body.addEventListener('keydown', e=>{
       const t = e.target;
       if(t.dataset.role === 'join-code' && e.key==='Enter') this.actions.joinGame.call(this);
       if(t.dataset.role === 'join-name' && e.key==='Enter') this.actions.confirmJoinName.call(this);
+      if(t.dataset.role === 'chat-input' && e.key==='Enter'){ e.preventDefault(); this.actions.sendChat.call(this); }
       if(t.dataset.role === 'word-input' && e.key==='Enter'){
         e.preventDefault();
         const i = Number(t.dataset.index);
@@ -495,6 +628,11 @@ class Game {
       selectPlayer: (t)=>{ this.local.selPid = t.dataset.pid; this.renderScreen(); },
       nextRound: ()=>this.hostNext(),
       playAgain: ()=>this.hostPlayAgain(),
+      pickAvatarEmoji: (t)=>{ this.local.avatarEmoji = t.dataset.emoji; this.refreshAvatarUI(); },
+      pickAvatarColor: (t)=>{ this.local.avatarColor = t.dataset.color; this.refreshAvatarUI(); },
+      toggleSound: ()=>this.toggleSound(),
+      toggleChat: ()=>this.toggleChat(),
+      sendChat: ()=>this.sendChat(),
     };
   }
 
@@ -516,6 +654,7 @@ class Game {
 
     this.root.innerHTML = html;
     this.renderModals();
+    this.renderHud();
 
     if(sc==='round'){
       this.later(()=>{ const el=this.root.querySelector('[data-role="word-input"][data-index="0"]'); if(el) el.focus({preventScroll:true}); }, 50);
@@ -560,6 +699,7 @@ class Game {
           <div class="heading" style="font-size:28px">¿Cómo te llamás?</div>
           <input data-role="join-name" value="${esc(this.local.joinNameDraft)}" placeholder="Tu nombre" autocomplete="off"
             style="height:60px;border-radius:16px;border:2px solid var(--ink);background:#fff;padding:0 18px;font-family:'Figtree',sans-serif;font-weight:700;font-size:20px;color:var(--ink);outline:none" autofocus>
+          ${this.avatarPicker(true)}
           <button class="btn-primary" data-action="confirmJoinName">UNIRME A LA SALA</button>
         </div>
       </div>`;
@@ -571,6 +711,30 @@ class Game {
       <div style="flex:0 0 auto;width:40px;height:40px;border-radius:12px;background:${color};border:2px solid var(--ink);display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:20px">${n}</div>
       <div style="display:flex;flex-direction:column;gap:2px"><div style="font-weight:800;font-size:17px">${title}</div><div style="font-size:15px;color:var(--muted);font-weight:600">${sub}</div></div>
     </div>`;
+  }
+
+  avatarPicker(compact){
+    const size = compact ? 38 : 44;
+    const emojiBtns = AVATAR_EMOJIS.map(e=>{
+      const sel = this.local.avatarEmoji === e;
+      return `<button data-action="pickAvatarEmoji" data-emoji="${e}" aria-label="Elegir ${e}" style="width:${size}px;height:${size}px;border-radius:12px;border:2px solid ${sel?INK:'var(--line)'};background:${sel?'#FFEDE6':'#fff'};font-size:${compact?18:20}px;display:flex;align-items:center;justify-content:center;transition:border-color .15s,background .15s">${e}</button>`;
+    }).join('');
+    const colorBtns = PALETTE.map(c=>{
+      const sel = this.local.avatarColor === c;
+      return `<button data-action="pickAvatarColor" data-color="${c}" aria-label="Elegir color" style="width:${compact?28:32}px;height:${compact?28:32}px;border-radius:50%;background:${c};border:2px solid ${INK};box-shadow:${sel?'0 0 0 3px #fff, 0 0 0 5px '+INK:'none'};transition:box-shadow .15s"></button>`;
+    }).join('');
+    return `<div style="display:flex;flex-direction:column;gap:10px">
+      <div style="display:flex;align-items:center;gap:12px">
+        <div class="avatar" style="width:${compact?46:56}px;height:${compact?46:56}px;background:${this.local.avatarColor};font-size:${compact?22:26}px">${esc(this.local.avatarEmoji)}</div>
+        <div style="font-size:13px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)">Tu avatar</div>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px">${emojiBtns}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px">${colorBtns}</div>
+    </div>`;
+  }
+  refreshAvatarUI(){
+    if(this.local.showJoinName) this.renderModals();
+    else this.renderScreen();
   }
 
   viewHome(){
@@ -623,6 +787,7 @@ class Game {
         <div style="font-size:14px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)">Tu nombre</div>
         <input data-role="cfg-name" value="${esc(this.local.cfgName)}" placeholder="¿Cómo te llamás?" style="height:60px;border-radius:16px;border:2px solid ${INK};background:#fff;padding:0 18px;font-family:'Figtree',sans-serif;font-weight:700;font-size:20px;color:${INK};outline:none">
       </div>
+      <div style="background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:16px 18px">${this.avatarPicker()}</div>
       <div style="background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:6px 18px;display:flex;flex-direction:column">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 0;border-bottom:2px solid var(--panel-line)">
           <div style="display:flex;flex-direction:column;gap:2px"><div style="font-weight:800;font-size:17px">Jugadores</div><div style="font-size:14px;color:var(--muted)">Máximo en la sala</div></div>
@@ -666,7 +831,7 @@ class Game {
       if(!p) return `<div style="display:flex;align-items:center;gap:12px;padding:12px;border-radius:20px;border:2px dashed var(--dashed);animation:breathe 2s ease-in-out infinite"><div style="flex:0 0 auto;width:46px;height:46px;border-radius:50%;border:2px dashed var(--dashed)"></div><div style="font-size:15px;font-weight:700;color:var(--muted)">Esperando…</div></div>`;
       const tag = p.id===this.myId ? (p.id===hostId?'Vos · Anfitrión':'Vos') : (p.id===hostId?'Anfitrión':'Listo para jugar');
       return `<div style="display:flex;align-items:center;gap:12px;padding:12px;border-radius:20px;background:#fff;border:2px solid ${INK};box-shadow:0 3px 0 ${INK};animation:pop .45s cubic-bezier(.3,1.5,.5,1) both">
-        <div class="avatar" style="width:46px;height:46px;background:${p.color};font-size:20px">${esc(p.name.charAt(0).toUpperCase())}</div>
+        <div class="avatar" style="width:46px;height:46px;background:${p.color};font-size:20px">${this.avatarInner(p)}</div>
         <div style="min-width:0;display:flex;flex-direction:column;gap:1px"><div style="font-weight:800;font-size:17px;overflow:hidden;text-overflow:ellipsis">${esc(p.name)}</div><div style="font-size:13px;font-weight:600;color:var(--muted)">${tag}</div></div>
       </div>`;
     }).join('');
@@ -699,7 +864,7 @@ class Game {
     const s = this.state, pl = this.players();
     const dots = pl.map(p=>{
       const done = !!s.done[p.id];
-      return `<div style="position:relative;width:38px;height:38px;border-radius:50%;background:${p.color};border:2px solid ${INK};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:16px;opacity:${done?1:0.45};transition:opacity .3s">${esc(p.name.charAt(0).toUpperCase())}${done?`<div style="position:absolute;right:-5px;bottom:-5px;width:20px;height:20px;border-radius:50%;background:${MINT};border:2px solid ${INK};display:flex;align-items:center;justify-content:center;animation:pop .4s both">${this.iconCheckSmall()}</div>`:''}</div>`;
+      return `<div style="position:relative;width:38px;height:38px;border-radius:50%;background:${p.color};border:2px solid ${INK};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:16px;opacity:${done?1:0.45};transition:opacity .3s">${this.avatarInner(p)}${done?`<div style="position:absolute;right:-5px;bottom:-5px;width:20px;height:20px;border-radius:50%;background:${MINT};border:2px solid ${INK};display:flex;align-items:center;justify-content:center;animation:pop .4s both">${this.iconCheckSmall()}</div>`:''}</div>`;
     }).join('');
     const doneNames = pl.filter(p=>p.id!==this.myId && s.done[p.id]).map(p=>p.name);
     const statusText = doneNames.length ? listJoin(doneNames)+(doneNames.length>1?' ya terminaron':' ya terminó') : 'Todos están escribiendo…';
@@ -760,7 +925,7 @@ class Game {
       const done = !!s.done[p.id];
       const label = p.id===this.myId ? p.name+' (vos)' : p.name;
       return `<div style="display:flex;align-items:center;gap:12px;padding:10px 0">
-        <div class="avatar" style="width:42px;height:42px;background:${p.color};font-size:18px">${esc(p.name.charAt(0).toUpperCase())}</div>
+        <div class="avatar" style="width:42px;height:42px;background:${p.color};font-size:18px">${this.avatarInner(p)}</div>
         <div style="flex:1;min-width:0;font-weight:800;font-size:17px">${esc(label)}</div>
         ${done ? `<div style="display:flex;align-items:center;gap:6px;padding:6px 12px;border-radius:999px;background:${MINT};border:2px solid ${INK};font-size:13px;font-weight:800;animation:pop .4s both">${this.iconCheckSmall()}Listo</div>`
                : `<div style="display:flex;align-items:center;gap:6px;padding:6px 12px;border-radius:999px;background:var(--panel-line);font-size:13px;font-weight:800;color:var(--muted)">Escribiendo<span style="display:flex;gap:2px"><span style="animation:blink 1.2s infinite">•</span><span style="animation:blink 1.2s .2s infinite">•</span><span style="animation:blink 1.2s .4s infinite">•</span></span></div>`}
@@ -800,7 +965,7 @@ class Game {
       const countBg = kind==='solo' ? 'var(--panel-line)' : INK;
       const countFg = kind==='solo' ? 'var(--muted)' : 'var(--cream)';
       const tag = kind==='match' ? '¡Vos también!' : kind==='shared' ? n+' coincidencias' : 'Solo '+(g.pids[0]===this.myId?'vos':(byId[g.pids[0]]?.name||'?'));
-      const avatars = g.pids.map(id=>`<div class="avatar" style="width:30px;height:30px;background:${byId[id]?.color||'#ccc'};font-size:13px">${esc((byId[id]?.name||'?').charAt(0).toUpperCase())}</div>`).join('');
+      const avatars = g.pids.map(id=>`<div class="avatar" style="width:30px;height:30px;background:${byId[id]?.color||'#ccc'};font-size:13px">${this.avatarInner(byId[id])}</div>`).join('');
       return `<div style="background:${bg};border:${border};box-shadow:${shadow};color:${fg};border-radius:22px;padding:16px 18px;display:flex;flex-direction:column;gap:12px;animation:pop .45s cubic-bezier(.3,1.5,.5,1) both">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
           <div style="min-width:0;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:30px;letter-spacing:-.01em;overflow-wrap:anywhere">${esc(g.label)}</div>
@@ -849,7 +1014,7 @@ class Game {
       const label = p.id===this.myId ? p.name+' (vos)' : p.name;
       return `<button data-action="selectPlayer" data-pid="${p.id}" style="display:flex;align-items:center;gap:12px;width:100%;padding:12px 16px 12px 12px;border-radius:20px;background:${p.id===this.myId?'#FFEDE6':'#fff'};border:2px solid ${sel?INK:'var(--line)'};box-shadow:${sel?`0 4px 0 ${INK}`:'none'};text-align:left;color:${INK};animation:rise .4s both;animation-delay:${(i*0.08).toFixed(2)}s">
         <div style="flex:0 0 auto;width:36px;height:36px;border-radius:12px;background:${RANKBG[i]||'#F1E7D8'};border:2px solid ${INK};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:18px">${i+1}</div>
-        <div class="avatar" style="width:42px;height:42px;background:${p.color};font-size:18px">${esc(p.name.charAt(0).toUpperCase())}</div>
+        <div class="avatar" style="width:42px;height:42px;background:${p.color};font-size:18px">${this.avatarInner(p)}</div>
         <div style="flex:1;min-width:0;font-weight:800;font-size:18px">${esc(label)}</div>
         <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:22px">${pts[p.id].total} pts</div>
       </button>`;
@@ -898,7 +1063,7 @@ class Game {
       const deltaColor = d>0?'#0E8A66':d<0?'#B3341A':'var(--muted)';
       return `<div style="position:absolute;left:0;right:0;top:${idx*86}px;height:72px;display:flex;align-items:center;gap:12px;padding:0 16px 0 10px;border-radius:22px;background:${bg};border:2px solid ${INK};box-shadow:0 4px 0 ${INK};transition:top .9s cubic-bezier(.34,1.45,.64,1)">
         <div style="flex:0 0 auto;width:44px;text-align:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:32px">${idx+1}</div>
-        <div class="avatar" style="width:46px;height:46px;background:${p.color};font-size:20px">${esc(p.name.charAt(0).toUpperCase())}</div>
+        <div class="avatar" style="width:46px;height:46px;background:${p.color};font-size:20px">${this.avatarInner(p)}</div>
         <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
           <div style="font-weight:800;font-size:18px">${esc(label)}</div>
           ${ph?`<div style="font-size:13px;font-weight:800;color:${deltaColor};animation:rise .3s both">${deltaText}</div>`:''}
@@ -936,7 +1101,7 @@ class Game {
     const podium = pod.map((i,idx)=>{
       const p = byId[nr[i]];
       return `<div style="flex:0 1 130px;min-width:0;display:flex;flex-direction:column;align-items:center;gap:8px;animation:rise .6s both;animation-delay:${(0.2+(2-i)*0.15).toFixed(2)}s">
-        <div class="avatar" style="width:${i===0?'72px':'56px'};height:${i===0?'72px':'56px'};background:${p.color};box-shadow:0 4px 0 ${INK};font-size:24px">${esc(p.name.charAt(0).toUpperCase())}</div>
+        <div class="avatar" style="width:${i===0?'72px':'56px'};height:${i===0?'72px':'56px'};background:${p.color};box-shadow:0 4px 0 ${INK};font-size:24px">${this.avatarInner(p)}</div>
         <div style="font-weight:800;font-size:16px;text-align:center">${esc(p.name)}</div>
         <div style="width:100%;height:${H[i]};border-radius:18px 18px 0 0;background:${PBG[i]};border:2.5px solid ${INK};border-bottom:0;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding-top:10px;gap:2px">
           <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:40px;line-height:1">${i+1}</div>
@@ -948,7 +1113,7 @@ class Game {
       const label = id===this.myId ? byId[id].name+' (vos)' : byId[id].name;
       return `<div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:${i<nr.length-1?'2px solid var(--panel-line)':'0'}">
         <div style="width:28px;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:20px">${i+1}</div>
-        <div class="avatar" style="width:38px;height:38px;background:${byId[id].color};font-size:16px">${esc(byId[id].name.charAt(0).toUpperCase())}</div>
+        <div class="avatar" style="width:38px;height:38px;background:${byId[id].color};font-size:16px">${this.avatarInner(byId[id])}</div>
         <div style="flex:1;min-width:0;font-weight:800;font-size:17px">${esc(label)}</div>
         <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:20px">${tot[id]} pts</div>
       </div>`;
@@ -1012,4 +1177,6 @@ class Game {
 const app = document.getElementById('app');
 const toastRoot = document.getElementById('toasts');
 const modalRoot = document.getElementById('modals');
-window.__game = new Game(app, toastRoot, modalRoot);
+const hudRoot = document.getElementById('hud');
+const chatRoot = document.getElementById('chatPanel');
+window.__game = new Game(app, toastRoot, modalRoot, hudRoot, chatRoot);

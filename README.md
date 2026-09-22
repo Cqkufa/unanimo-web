@@ -6,6 +6,8 @@ Juego de fiesta multijugador para jugar en grupo, cada uno desde su propio celul
 
 Jugá una partida en vivo: creá una sala, compartí el código de 5 letras, y arranquen cuando estén todos.
 
+Cada jugador elige su nombre y un avatar (emoji + color) al entrar. Hay efectos de sonido (clics, alguien se une — silenciables con el ícono de parlante) y un chat flotante para hablar con el resto durante la partida.
+
 ## Cómo jugar
 
 1. Todos reciben la misma palabra (ej: **PLAYA**).
