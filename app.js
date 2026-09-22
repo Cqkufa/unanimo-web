@@ -6,19 +6,25 @@ const INK='#1D1B2F', CORAL='#FF6B4A', MINT='#2ED3A6', YEL='#FFC83D', VIOLET='#9B
 const PALETTE=[CORAL,VIOLET,MINT,YEL,BLUE,PINK];
 const RANKBG=[YEL,'#E4DEF5','#F6BE9E'];
 const CONF_COLORS=[CORAL,YEL,MINT,VIOLET,BLUE,PINK];
-/* ---------- avatar builder: skin tone + face features + optional hat, all cycled with arrows ---------- */
-const SKIN_TONES = ['#FFE0BD','#FFCD94','#EAC086','#C68642','#8D5524','#4A2C17'];
-const EYE_STYLES = ['normal','happy','wide','sleepy','wink'];
-const MOUTH_STYLES = ['smile','grin','flat','smirk','surprised'];
-const HAT_NAMES = ['Ninguno','Gorra','Corona','Lentes','Parche','Bigote','Cuernos','Pizza'];
+/* ---------- avatar builder: face color + features + optional accessory, all cycled with arrows ---------- */
+// 10 options per category: a handful of skin tones plus properly "no
+// human has this skin" colors (green, blue, violet, pink, yellow) —
+// this is a face colour, not just a skin tone, so it's deliberately silly.
+const FACE_COLORS = ['#FFE0BD','#FFCD94','#C68642','#8D5524','#4A2C17','#7ED957','#5CB8FF','#9B85FF','#FF8CC2','#FFC83D'];
+const FACE_COLOR_NAMES = ['Clara','Media','Canela','Morena','Oscura','Verde','Azul','Violeta','Rosa','Amarilla'];
+const EYE_STYLES = ['normal','happy','wide','sleepy','wink','cross','hearts','stars','dizzy','cyclops'];
+const EYE_NAMES = ['Normales','Felices','Sorprendidos','Dormidos','Guiño','Bizcos','Enamorados','Estrellas','Mareados','Cíclope'];
+const MOUTH_STYLES = ['smile','grin','flat','smirk','surprised','tongue','teeth','kiss','fangs','zigzag'];
+const MOUTH_NAMES = ['Sonrisa','Sonrisón','Seria','Pícara','Sorprendida','Lengua afuera','Dientes apretados','Beso','Colmillos','Nerviosa'];
+const HAT_NAMES = ['Ninguno','Gorra','Corona','Lentes','Parche','Bigote','Cuernos','Pizza','Auriculares','Aureola'];
 const AVATAR_TRAITS = [
-  {key:'skin', label:'Piel', count:SKIN_TONES.length},
-  {key:'eyes', label:'Ojos', count:EYE_STYLES.length},
-  {key:'mouth', label:'Boca', count:MOUTH_STYLES.length},
-  {key:'hat', label:'Accesorio', count:HAT_NAMES.length},
+  {key:'skin', label:'Color', count:FACE_COLORS.length, names:FACE_COLOR_NAMES},
+  {key:'eyes', label:'Ojos', count:EYE_STYLES.length, names:EYE_NAMES},
+  {key:'mouth', label:'Boca', count:MOUTH_STYLES.length, names:MOUTH_NAMES},
+  {key:'hat', label:'Accesorio', count:HAT_NAMES.length, names:HAT_NAMES},
 ];
 function randomAvatar(){
-  return { skin:Math.floor(Math.random()*SKIN_TONES.length), eyes:Math.floor(Math.random()*EYE_STYLES.length), mouth:Math.floor(Math.random()*MOUTH_STYLES.length), hat:0 };
+  return { skin:Math.floor(Math.random()*FACE_COLORS.length), eyes:Math.floor(Math.random()*EYE_STYLES.length), mouth:Math.floor(Math.random()*MOUTH_STYLES.length), hat:0 };
 }
 // Pixel-art style: bold rectangular blocks with hard edges instead of
 // smooth curves, matching a chunky 8-bit avatar look. Everything is
@@ -30,6 +36,11 @@ function eyesSVG(style){
     case 'wide': return `<rect x="22" y="28" width="20" height="20" fill="#fff" stroke="${INK}" stroke-width="4"/><rect x="28" y="34" width="8" height="8" fill="${INK}"/><rect x="58" y="28" width="20" height="20" fill="#fff" stroke="${INK}" stroke-width="4"/><rect x="64" y="34" width="8" height="8" fill="${INK}"/>`;
     case 'sleepy': return `<rect x="24" y="40" width="16" height="5" fill="${INK}"/><rect x="60" y="40" width="16" height="5" fill="${INK}"/>`;
     case 'wink': return `<rect x="26" y="30" width="14" height="14" fill="${INK}"/><rect x="60" y="38" width="16" height="6" fill="${INK}"/>`;
+    case 'cross': return `<rect x="20" y="30" width="18" height="16" fill="#fff" stroke="${INK}" stroke-width="3"/><rect x="30" y="34" width="7" height="8" fill="${INK}"/><rect x="62" y="30" width="18" height="16" fill="#fff" stroke="${INK}" stroke-width="3"/><rect x="63" y="34" width="7" height="8" fill="${INK}"/>`;
+    case 'hearts': return `<rect x="22" y="30" width="6" height="6" fill="${CORAL}"/><rect x="30" y="30" width="6" height="6" fill="${CORAL}"/><rect x="20" y="36" width="18" height="6" fill="${CORAL}"/><rect x="25" y="42" width="8" height="4" fill="${CORAL}"/><rect x="60" y="30" width="6" height="6" fill="${CORAL}"/><rect x="68" y="30" width="6" height="6" fill="${CORAL}"/><rect x="58" y="36" width="18" height="6" fill="${CORAL}"/><rect x="63" y="42" width="8" height="4" fill="${CORAL}"/>`;
+    case 'stars': return `<rect x="27" y="26" width="6" height="20" fill="${YEL}" stroke="${INK}" stroke-width="2"/><rect x="19" y="34" width="22" height="6" fill="${YEL}" stroke="${INK}" stroke-width="2"/><rect x="65" y="26" width="6" height="20" fill="${YEL}" stroke="${INK}" stroke-width="2"/><rect x="57" y="34" width="22" height="6" fill="${YEL}" stroke="${INK}" stroke-width="2"/>`;
+    case 'dizzy': return `<g transform="rotate(45 32 38)"><rect x="23" y="35" width="18" height="6" fill="${INK}"/><rect x="29" y="29" width="6" height="18" fill="${INK}"/></g><g transform="rotate(45 68 38)"><rect x="59" y="35" width="18" height="6" fill="${INK}"/><rect x="65" y="29" width="6" height="18" fill="${INK}"/></g>`;
+    case 'cyclops': return `<rect x="38" y="26" width="24" height="24" fill="#fff" stroke="${INK}" stroke-width="4"/><rect x="46" y="34" width="8" height="8" fill="${INK}"/>`;
     default: return `<rect x="26" y="30" width="14" height="14" fill="${INK}"/><rect x="60" y="30" width="14" height="14" fill="${INK}"/>`;
   }
 }
@@ -39,6 +50,11 @@ function mouthSVG(style){
     case 'flat': return `<rect x="32" y="64" width="36" height="6" fill="${INK}"/>`;
     case 'smirk': return `<rect x="32" y="60" width="10" height="6" fill="${INK}"/><rect x="42" y="64" width="10" height="6" fill="${INK}"/><rect x="52" y="68" width="16" height="6" fill="${INK}"/>`;
     case 'surprised': return `<rect x="42" y="60" width="16" height="16" fill="${INK}"/>`;
+    case 'tongue': return `<rect x="28" y="60" width="10" height="6" fill="${INK}"/><rect x="38" y="68" width="24" height="6" fill="${INK}"/><rect x="62" y="60" width="10" height="6" fill="${INK}"/><rect x="44" y="70" width="12" height="12" fill="${PINK}" stroke="${INK}" stroke-width="2"/>`;
+    case 'teeth': return `<rect x="30" y="60" width="40" height="14" fill="#fff" stroke="${INK}" stroke-width="3"/><rect x="38" y="60" width="6" height="14" fill="${INK}"/><rect x="50" y="60" width="6" height="14" fill="${INK}"/><rect x="62" y="60" width="6" height="14" fill="${INK}"/>`;
+    case 'kiss': return `<rect x="44" y="62" width="12" height="12" fill="${PINK}" stroke="${INK}" stroke-width="3"/>`;
+    case 'fangs': return `<rect x="32" y="64" width="36" height="6" fill="${INK}"/><rect x="36" y="70" width="6" height="9" fill="#fff" stroke="${INK}" stroke-width="2"/><rect x="58" y="70" width="6" height="9" fill="#fff" stroke="${INK}" stroke-width="2"/>`;
+    case 'zigzag': return `<rect x="26" y="62" width="9" height="6" fill="${INK}"/><rect x="35" y="68" width="9" height="6" fill="${INK}"/><rect x="44" y="62" width="9" height="6" fill="${INK}"/><rect x="53" y="68" width="9" height="6" fill="${INK}"/><rect x="62" y="62" width="9" height="6" fill="${INK}"/>`;
     default: return `<rect x="28" y="60" width="10" height="6" fill="${INK}"/><rect x="38" y="68" width="24" height="6" fill="${INK}"/><rect x="62" y="60" width="10" height="6" fill="${INK}"/>`;
   }
 }
@@ -51,12 +67,14 @@ function hatSVG(idx){
     case 5: return `<rect x="24" y="52" width="16" height="8" fill="${INK}"/><rect x="60" y="52" width="16" height="8" fill="${INK}"/><rect x="38" y="50" width="24" height="6" fill="${INK}"/>`;
     case 6: return `<rect x="12" y="2" width="12" height="12" fill="${CORAL}" stroke="${INK}" stroke-width="3"/><rect x="22" y="14" width="8" height="8" fill="${CORAL}" stroke="${INK}" stroke-width="3"/><rect x="76" y="2" width="12" height="12" fill="${CORAL}" stroke="${INK}" stroke-width="3"/><rect x="70" y="14" width="8" height="8" fill="${CORAL}" stroke="${INK}" stroke-width="3"/>`;
     case 7: return `<rect x="32" y="0" width="36" height="8" fill="${YEL}" stroke="${INK}" stroke-width="3"/><rect x="38" y="8" width="24" height="8" fill="${YEL}" stroke="${INK}" stroke-width="3"/><rect x="44" y="16" width="12" height="6" fill="${YEL}" stroke="${INK}" stroke-width="3"/><rect x="42" y="2" width="6" height="6" fill="${CORAL}"/><rect x="54" y="10" width="6" height="6" fill="${CORAL}"/>`;
+    case 8: return `<rect x="14" y="30" width="10" height="24" fill="${INK}"/><rect x="76" y="30" width="10" height="24" fill="${INK}"/><rect x="18" y="10" width="64" height="10" fill="${INK}"/><rect x="16" y="36" width="6" height="12" fill="${BLUE}"/><rect x="78" y="36" width="6" height="12" fill="${BLUE}"/>`;
+    case 9: return `<rect x="28" y="0" width="44" height="8" fill="none" stroke="${YEL}" stroke-width="4"/>`;
     default: return '';
   }
 }
 function avatarSVG(av, px){
   av = av || {};
-  const skin = SKIN_TONES[av.skin||0] || SKIN_TONES[0];
+  const skin = FACE_COLORS[av.skin||0] || FACE_COLORS[0];
   return `<svg viewBox="0 0 100 100" width="${px}" height="${px}" style="display:block;overflow:visible;flex:0 0 auto">
     <circle cx="50" cy="52" r="44" fill="${skin}" stroke="${INK}" stroke-width="4"/>
     ${eyesSVG(EYE_STYLES[av.eyes||0])}
@@ -149,7 +167,7 @@ class Game {
   /* ---------- players / scoring (mirrors design logic) ---------- */
   players(){ return (this.state && this.state.players) || []; }
   playerById(id){ return this.players().find(p=>p.id===id); }
-  accentColor(p){ const av=(p&&p.avatar)||{}; return SKIN_TONES[av.skin||0] || SKIN_TONES[0]; }
+  accentColor(p){ const av=(p&&p.avatar)||{}; return FACE_COLORS[av.skin||0] || FACE_COLORS[0]; }
   groups(r){
     const a = this.state?.answers?.[r]; if(!a) return [];
     const m = {};
@@ -773,13 +791,13 @@ class Game {
     const previewSize = compact ? 76 : 96;
     const rows = AVATAR_TRAITS.map(t=>{
       const idx = av[t.key] || 0;
-      const valueLabel = t.key==='hat' ? HAT_NAMES[idx] : (idx+1)+'/'+t.count;
-      return `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:${compact?7:9}px 0;border-top:2px solid var(--panel-line)">
-        <div style="font-weight:800;font-size:14px;width:76px;flex:0 0 auto">${t.label}</div>
-        <div style="display:flex;align-items:center;gap:8px">
-          <button data-action="avatarPrev" data-trait="${t.key}" data-count="${t.count}" aria-label="${t.label} anterior" style="width:32px;height:32px;border-radius:10px;border:2px solid ${INK};background:#fff;font-weight:800;font-size:15px;display:flex;align-items:center;justify-content:center">◀</button>
-          <div style="min-width:70px;text-align:center;font-weight:800;font-size:12px;color:var(--muted)">${valueLabel}</div>
-          <button data-action="avatarNext" data-trait="${t.key}" data-count="${t.count}" aria-label="${t.label} siguiente" style="width:32px;height:32px;border-radius:10px;border:2px solid ${INK};background:#fff;font-weight:800;font-size:15px;display:flex;align-items:center;justify-content:center">▶</button>
+      const valueLabel = t.names ? t.names[idx] : (idx+1)+'/'+t.count;
+      return `<div style="padding:${compact?6:8}px 0;border-top:2px solid var(--panel-line)">
+        <div style="font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding-bottom:4px">${t.label}</div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <button data-action="avatarPrev" data-trait="${t.key}" data-count="${t.count}" aria-label="${t.label} anterior" style="flex:0 0 auto;width:32px;height:32px;border-radius:10px;border:2px solid ${INK};background:#fff;font-weight:800;font-size:15px;display:flex;align-items:center;justify-content:center">◀</button>
+          <div style="flex:1;min-width:0;text-align:center;font-weight:800;font-size:14px;overflow-wrap:anywhere">${valueLabel}</div>
+          <button data-action="avatarNext" data-trait="${t.key}" data-count="${t.count}" aria-label="${t.label} siguiente" style="flex:0 0 auto;width:32px;height:32px;border-radius:10px;border:2px solid ${INK};background:#fff;font-weight:800;font-size:15px;display:flex;align-items:center;justify-content:center">▶</button>
         </div>
       </div>`;
     }).join('');
