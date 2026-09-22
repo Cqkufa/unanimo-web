@@ -184,14 +184,23 @@ class Game {
     }
     else if(msg.type === 'submit'){
       if(msg.round !== this.state.round) return;
-      if(this.state.done[msg.id]) return;
+      // A player is only truly "done" once we hold a real (possibly empty-
+      // by-choice) submission for them. The round watchdog force-fills
+      // stragglers with [] so the game can move on; that placeholder must
+      // NOT block a genuine submission that arrives a little late (slow
+      // network, clock drift) from overwriting it — otherwise their real
+      // words are silently lost from the reveal.
+      const already = this.state.done[msg.id];
+      const hadRealAnswer = already && (this.state.answers[this.state.round]?.[msg.id]?.length > 0);
+      if(hadRealAnswer) return;
+      const wasLate = already;
       if(!this.state.answers[this.state.round]) this.state.answers[this.state.round] = {};
       this.state.answers[this.state.round][msg.id] = msg.words;
       this.state.done[msg.id] = true;
       const p = this.playerById(msg.id);
       if(p && p.id !== this.myId) this.toast(p.name+' terminó', p.color);
       this.broadcastState();
-      this.checkAllDone();
+      if(!wasLate) this.checkAllDone();
     }
     else if(msg.type === 'leave'){
       this.state.players = this.state.players.filter(p=>p.id!==msg.id);
@@ -242,6 +251,9 @@ class Game {
     if(this.local.screen === 'lobby') this.renderScreen();
     else if(this.local.screen === 'wait') this.renderScreen();
     else if(this.local.screen === 'round') this.patchRoundStatus();
+    // A straggler's answer can arrive after reveal has already started
+    // (see the 'submit' handler above) — refresh so it's not lost from view.
+    else if(this.local.screen === 'reveal') this.renderScreen();
   }
 
   /* ---------- round flow (host drives global stage) ---------- */
@@ -264,7 +276,7 @@ class Game {
     clearInterval(this.hostWatch);
     this.hostWatch = setInterval(()=>{
       if(!this.isHost || this.state.phase!=='round' || this.state.round!==r) { clearInterval(this.hostWatch); return; }
-      if(Date.now() >= this.state.roundEndAt + 4000){
+      if(Date.now() >= this.state.roundEndAt + 9000){
         this.players().forEach(p=>{ if(!this.state.done[p.id]){ if(!this.state.answers[r]) this.state.answers[r]={}; this.state.answers[r][p.id] = this.state.answers[r][p.id]||[]; this.state.done[p.id]=true; } });
         this.broadcastState();
         clearInterval(this.hostWatch);
