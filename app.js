@@ -20,9 +20,10 @@ const clamp = (n,lo,hi) => Math.max(lo,Math.min(hi,n));
 const LS_KEY = 'unanimo:session';
 
 class Game {
-  constructor(root, toastRoot){
+  constructor(root, toastRoot, modalRoot){
     this.root = root;
     this.toastRoot = toastRoot;
+    this.modalRoot = modalRoot;
     this.myId = null;
     this.channel = null;
     this.timers = [];
@@ -137,7 +138,7 @@ class Game {
     if(code.length < 5){ this.toast('El código tiene 5 caracteres', CORAL); return; }
     this.local.showJoinName = true;
     this.local.joinNameDraft = this.local.cfgName || '';
-    this.renderScreen();
+    this.renderModals();
   }
   async confirmJoinName(){
     const name = (this.local.joinNameDraft||'').trim().slice(0,14);
@@ -367,14 +368,16 @@ class Game {
 
   /* ---------- event delegation ---------- */
   _bindDelegation(){
-    this.root.addEventListener('click', e=>{
+    // Delegated on document.body (not this.root) so clicks/input inside the
+    // separately-rendered modal container are handled too.
+    document.body.addEventListener('click', e=>{
       const t = e.target.closest('[data-action]');
       if(!t) return;
       const action = t.dataset.action;
       const fn = this.actions[action];
       if(fn) fn.call(this, t, e);
     });
-    this.root.addEventListener('input', e=>{
+    document.body.addEventListener('input', e=>{
       const t = e.target;
       if(t.dataset.role === 'cfg-name'){ this.local.cfgName = t.value.slice(0,14); }
       else if(t.dataset.role === 'join-code'){ this.local.joinCode = t.value.toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,5); t.value=this.local.joinCode; }
@@ -385,7 +388,7 @@ class Game {
         this.patchWordMeta();
       }
     });
-    this.root.addEventListener('keydown', e=>{
+    document.body.addEventListener('keydown', e=>{
       const t = e.target;
       if(t.dataset.role === 'join-code' && e.key==='Enter') this.actions.joinGame.call(this);
       if(t.dataset.role === 'join-name' && e.key==='Enter') this.actions.confirmJoinName.call(this);
@@ -422,10 +425,10 @@ class Game {
     return {
       goHome: ()=>this.goHome(),
       goCreate: ()=>{ this.local.screen='create'; this.renderScreen(); },
-      openHow: ()=>{ this.local.modal='how'; this.renderScreen(); },
-      closeModal: ()=>{ this.local.modal=null; this.local.showJoinName=false; this.renderScreen(); },
+      openHow: ()=>{ this.local.modal='how'; this.renderModals(); },
+      closeModal: ()=>{ this.local.modal=null; this.local.showJoinName=false; this.renderModals(); },
       stop: (t,e)=>e.stopPropagation(),
-      askLeave: ()=>{ this.local.modal='leave'; this.renderScreen(); },
+      askLeave: ()=>{ this.local.modal='leave'; this.renderModals(); },
       createGame: ()=>this.createGame(),
       joinGame: ()=>this.joinGame(),
       confirmJoinName: ()=>this.confirmJoinName(),
@@ -463,14 +466,21 @@ class Game {
     else if(sc==='final') html = this.viewFinal();
     else html = this.viewHome();
 
-    html += this.viewModals();
     this.root.innerHTML = html;
+    this.renderModals();
 
     if(sc==='round'){
       this.later(()=>{ const el=this.root.querySelector('[data-role="word-input"][data-index="0"]'); if(el) el.focus({preventScroll:true}); }, 50);
       const left = this.state ? Math.max(0, Math.round((this.state.roundEndAt - Date.now())/1000)) : 0;
       this.patchTimer(left);
     }
+  }
+
+  // Modal container is separate from the screen container so opening/closing
+  // a modal never forces a full screen re-render (which would replay
+  // entrance animations and could steal focus from inputs mid-round).
+  renderModals(){
+    this.modalRoot.innerHTML = this.viewModals();
   }
 
   viewModals(){
@@ -953,4 +963,5 @@ class Game {
 
 const app = document.getElementById('app');
 const toastRoot = document.getElementById('toasts');
-window.__game = new Game(app, toastRoot);
+const modalRoot = document.getElementById('modals');
+window.__game = new Game(app, toastRoot, modalRoot);
