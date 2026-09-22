@@ -6,7 +6,60 @@ const INK='#1D1B2F', CORAL='#FF6B4A', MINT='#2ED3A6', YEL='#FFC83D', VIOLET='#9B
 const PALETTE=[CORAL,VIOLET,MINT,YEL,BLUE,PINK];
 const RANKBG=[YEL,'#E4DEF5','#F6BE9E'];
 const CONF_COLORS=[CORAL,YEL,MINT,VIOLET,BLUE,PINK];
-const AVATAR_EMOJIS=['😎','🦄','🐙','🍕','🌵','🍦','🐸','🦩','🎲','🐳','🍉','🦀','🌈','⚡️','🎉','🐶'];
+/* ---------- avatar builder: skin tone + face features + optional hat, all cycled with arrows ---------- */
+const SKIN_TONES = ['#FFE0BD','#FFCD94','#EAC086','#C68642','#8D5524','#4A2C17'];
+const EYE_STYLES = ['normal','happy','wide','sleepy','wink'];
+const NOSE_STYLES = ['dot','triangle','button','none'];
+const MOUTH_STYLES = ['smile','grin','flat','smirk','surprised'];
+const HAT_EMOJIS = [null,'🧢','🎩','👑','🎓','🌸','🏴‍☠️'];
+const AVATAR_TRAITS = [
+  {key:'skin', label:'Piel', count:SKIN_TONES.length},
+  {key:'eyes', label:'Ojos', count:EYE_STYLES.length},
+  {key:'nose', label:'Nariz', count:NOSE_STYLES.length},
+  {key:'mouth', label:'Boca', count:MOUTH_STYLES.length},
+  {key:'hat', label:'Sombrero', count:HAT_EMOJIS.length},
+];
+function randomAvatar(){
+  return { skin:Math.floor(Math.random()*SKIN_TONES.length), eyes:Math.floor(Math.random()*EYE_STYLES.length), nose:0, mouth:Math.floor(Math.random()*MOUTH_STYLES.length), hat:0 };
+}
+function eyesSVG(style){
+  switch(style){
+    case 'happy': return `<path d="M26,42 Q34,34 42,42" stroke="${INK}" stroke-width="4" fill="none" stroke-linecap="round"/><path d="M58,42 Q66,34 74,42" stroke="${INK}" stroke-width="4" fill="none" stroke-linecap="round"/>`;
+    case 'wide': return `<circle cx="34" cy="42" r="8" fill="#fff" stroke="${INK}" stroke-width="3"/><circle cx="34" cy="42" r="3" fill="${INK}"/><circle cx="66" cy="42" r="8" fill="#fff" stroke="${INK}" stroke-width="3"/><circle cx="66" cy="42" r="3" fill="${INK}"/>`;
+    case 'sleepy': return `<line x1="28" y1="42" x2="40" y2="42" stroke="${INK}" stroke-width="4" stroke-linecap="round"/><line x1="60" y1="42" x2="72" y2="42" stroke="${INK}" stroke-width="4" stroke-linecap="round"/>`;
+    case 'wink': return `<circle cx="34" cy="42" r="5" fill="${INK}"/><path d="M60,42 Q66,38 72,42" stroke="${INK}" stroke-width="4" fill="none" stroke-linecap="round"/>`;
+    default: return `<circle cx="34" cy="42" r="5" fill="${INK}"/><circle cx="66" cy="42" r="5" fill="${INK}"/>`;
+  }
+}
+function noseSVG(style){
+  switch(style){
+    case 'triangle': return `<path d="M46,48 L54,48 L50,58 Z" fill="${INK}"/>`;
+    case 'button': return `<path d="M46,50 Q50,58 54,50" stroke="${INK}" stroke-width="3" fill="none" stroke-linecap="round"/>`;
+    case 'none': return '';
+    default: return `<circle cx="50" cy="53" r="3" fill="${INK}"/>`;
+  }
+}
+function mouthSVG(style){
+  switch(style){
+    case 'grin': return `<path d="M34,62 Q50,80 66,62 Q50,70 34,62 Z" fill="#fff" stroke="${INK}" stroke-width="3"/>`;
+    case 'flat': return `<line x1="38" y1="66" x2="62" y2="66" stroke="${INK}" stroke-width="4" stroke-linecap="round"/>`;
+    case 'smirk': return `<path d="M38,64 Q50,68 62,60" stroke="${INK}" stroke-width="4" fill="none" stroke-linecap="round"/>`;
+    case 'surprised': return `<circle cx="50" cy="66" r="6" fill="#fff" stroke="${INK}" stroke-width="3"/>`;
+    default: return `<path d="M36,62 Q50,76 64,62" stroke="${INK}" stroke-width="4" fill="none" stroke-linecap="round"/>`;
+  }
+}
+function avatarSVG(av, px){
+  av = av || {};
+  const skin = SKIN_TONES[av.skin||0] || SKIN_TONES[0];
+  const hat = HAT_EMOJIS[av.hat||0];
+  return `<svg viewBox="0 0 100 100" width="${px}" height="${px}" style="display:block;overflow:visible;flex:0 0 auto">
+    <circle cx="50" cy="52" r="44" fill="${skin}" stroke="${INK}" stroke-width="4"/>
+    ${eyesSVG(EYE_STYLES[av.eyes||0])}
+    ${noseSVG(NOSE_STYLES[av.nose||0])}
+    ${mouthSVG(MOUTH_STYLES[av.mouth||0])}
+    ${hat?`<text x="50" y="20" font-size="32" text-anchor="middle" dominant-baseline="middle">${hat}</text>`:''}
+  </svg>`;
+}
 
 const DIACRITICS_RE = new RegExp(String.fromCharCode(0x5b,0x5c,0x75,0x30,0x33,0x30,0x30,0x2d,0x5c,0x75,0x30,0x33,0x36,0x66,0x5d),'g');
 const norm = s => (s||'').trim().toLowerCase().normalize('NFD').replace(DIACRITICS_RE,'');
@@ -52,8 +105,7 @@ class Game {
     this.confetti = Array.from({length:40},(_,i)=>({left:((i*37)%100)+'%',delay:((i%13)*0.23).toFixed(2)+'s',dur:(2.8+(i%5)*0.5)+'s',color:CONF_COLORS[i%6],w:(8+(i%3)*4)+'px',h:(12+(i%4)*3)+'px'}));
     this.local = { screen:'home', modal:null, cfgName:'', joinCode:'', joining:false, joinError:'', showJoinName:false, joinNameDraft:'',
       inputs:[], submitted:false, reveal:0, appliedStage:-1, selPid:null, rankPhase:1, lastRound:-1,
-      avatarEmoji: AVATAR_EMOJIS[Math.floor(Math.random()*AVATAR_EMOJIS.length)],
-      avatarColor: PALETTE[Math.floor(Math.random()*PALETTE.length)],
+      avatar: randomAvatar(),
       chatOpen:false, chatUnread:0, chatDraft:'' };
     this.cfgDraft = { players:8, rounds:3, words:6, time:45 };
     this.state = null; // host-authoritative shared state, once in a room
@@ -93,7 +145,7 @@ class Game {
   /* ---------- players / scoring (mirrors design logic) ---------- */
   players(){ return (this.state && this.state.players) || []; }
   playerById(id){ return this.players().find(p=>p.id===id); }
-  avatarInner(p){ return p && p.emoji ? esc(p.emoji) : esc(((p&&p.name)||'?').charAt(0).toUpperCase()); }
+  accentColor(p){ const av=(p&&p.avatar)||{}; return SKIN_TONES[av.skin||0] || SKIN_TONES[0]; }
   groups(r){
     const a = this.state?.answers?.[r]; if(!a) return [];
     const m = {};
@@ -162,7 +214,7 @@ class Game {
     const cfg = { ...this.cfgDraft };
     this.state = {
       code, hostId:this.myId, config:cfg,
-      players:[{id:this.myId, name, color:this.local.avatarColor, emoji:this.local.avatarEmoji, joinedAt:Date.now()}],
+      players:[{id:this.myId, name, avatar:{...this.local.avatar}, joinedAt:Date.now()}],
       phase:'lobby', stage:0, round:-1, roundWord:'', roundEndAt:0, usedWords:[],
       answers:[], done:{}, rev:0, updatedAt:Date.now()
     };
@@ -193,7 +245,7 @@ class Game {
     this.renderScreen();
     try{
       await this.connect(code);
-      this.sendAction('join', { id:this.myId, name, color:this.local.avatarColor, emoji:this.local.avatarEmoji });
+      this.sendAction('join', { id:this.myId, name, avatar:{...this.local.avatar} });
       this.later(()=>{
         if(this.local.joining){
           this.local.joining = false;
@@ -215,9 +267,8 @@ class Game {
       if(this.playerById(msg.id)) { this.broadcastState(); return; }
       const cap = this.state.config.players;
       if(this.state.players.length >= cap){ return; }
-      const color = msg.color || PALETTE[this.state.players.length % PALETTE.length];
-      const emoji = msg.emoji || null;
-      this.state.players.push({id:msg.id, name:(msg.name||'Jugador').slice(0,14), color, emoji, joinedAt:Date.now()});
+      const avatar = msg.avatar || randomAvatar();
+      this.state.players.push({id:msg.id, name:(msg.name||'Jugador').slice(0,14), avatar, joinedAt:Date.now()});
       // No toast here — every client (host included) announces new joins
       // uniformly from onState's roster diff, so everyone hears it, not
       // just the host.
@@ -242,7 +293,7 @@ class Game {
       this.state.answers[this.state.round][msg.id] = msg.words;
       this.state.done[msg.id] = true;
       const p = this.playerById(msg.id);
-      if(p && p.id !== this.myId) this.toast(p.name+' terminó', p.color);
+      if(p && p.id !== this.myId) this.toast(p.name+' terminó', this.accentColor(p));
       this.broadcastState();
       if(!wasLate) this.checkAllDone();
     }
@@ -287,7 +338,7 @@ class Game {
       (s.players||[]).forEach(p=>{
         if(!known.has(p.id)){
           known.add(p.id);
-          if(p.id !== this.myId){ this.toast(p.name+' se unió', p.color); this.playJoin(); }
+          if(p.id !== this.myId){ this.toast(p.name+' se unió', this.accentColor(p)); this.playJoin(); }
         }
       });
       this._knownPlayerIds = known;
@@ -473,7 +524,7 @@ class Game {
     const text = (this.local.chatDraft||'').trim().slice(0,240);
     if(!text || !this.state) return;
     const me = this.playerById(this.myId);
-    const msg = { id:uid(), playerId:this.myId, name:(me&&me.name)||this.local.cfgName||'Vos', color:(me&&me.color)||this.local.avatarColor, emoji:(me&&me.emoji)||this.local.avatarEmoji, text, ts:Date.now() };
+    const msg = { id:uid(), playerId:this.myId, name:(me&&me.name)||this.local.cfgName||'Vos', avatar:(me&&me.avatar)||this.local.avatar, text, ts:Date.now() };
     this.chatMessages = [...this.chatMessages.slice(-99), msg];
     this.local.chatDraft = '';
     this.send('chat', msg);
@@ -511,7 +562,7 @@ class Game {
       const mine = m.playerId === this.myId;
       return `<div style="display:flex;flex-direction:column;align-items:${mine?'flex-end':'flex-start'};gap:2px">
         <div style="font-size:11px;font-weight:800;color:var(--muted);padding:0 4px">${mine?'Vos':esc(m.name)}</div>
-        <div style="max-width:78%;display:flex;align-items:center;gap:8px;padding:9px 13px;border-radius:16px;${mine?'border-bottom-right-radius:4px':'border-bottom-left-radius:4px'};background:${mine?CORAL:'#fff'};border:2px solid ${INK};font-size:15px;font-weight:600;overflow-wrap:anywhere">${m.emoji?`<span style="font-size:16px">${esc(m.emoji)}</span>`:''}<span>${esc(m.text)}</span></div>
+        <div style="max-width:78%;display:flex;align-items:center;gap:8px;padding:9px 13px;border-radius:16px;${mine?'border-bottom-right-radius:4px':'border-bottom-left-radius:4px'};background:${mine?CORAL:'#fff'};border:2px solid ${INK};font-size:15px;font-weight:600;overflow-wrap:anywhere">${avatarSVG(m.avatar,20)}<span>${esc(m.text)}</span></div>
       </div>`;
     }).join('') || `<div style="text-align:center;color:var(--muted);font-size:14px;font-weight:700;padding:20px 0">Todavía no hay mensajes. ¡Decí algo!</div>`;
     this.chatRoot.innerHTML = `<div style="position:fixed;right:16px;bottom:80px;z-index:69;width:min(340px, calc(100vw - 32px));max-height:min(60vh, 460px);display:flex;flex-direction:column;background:var(--cream);border:2.5px solid ${INK};border-radius:22px;box-shadow:0 8px 0 ${INK};overflow:hidden;animation:pop .3s cubic-bezier(.3,1.5,.5,1) both">
@@ -628,8 +679,8 @@ class Game {
       selectPlayer: (t)=>{ this.local.selPid = t.dataset.pid; this.renderScreen(); },
       nextRound: ()=>this.hostNext(),
       playAgain: ()=>this.hostPlayAgain(),
-      pickAvatarEmoji: (t)=>{ this.local.avatarEmoji = t.dataset.emoji; this.refreshAvatarUI(); },
-      pickAvatarColor: (t)=>{ this.local.avatarColor = t.dataset.color; this.refreshAvatarUI(); },
+      avatarPrev: (t)=>{ const k=t.dataset.trait, n=Number(t.dataset.count); this.local.avatar[k] = ((this.local.avatar[k]||0)-1+n)%n; this.refreshAvatarUI(); },
+      avatarNext: (t)=>{ const k=t.dataset.trait, n=Number(t.dataset.count); this.local.avatar[k] = ((this.local.avatar[k]||0)+1)%n; this.refreshAvatarUI(); },
       toggleSound: ()=>this.toggleSound(),
       toggleChat: ()=>this.toggleChat(),
       sendChat: ()=>this.sendChat(),
@@ -714,22 +765,25 @@ class Game {
   }
 
   avatarPicker(compact){
-    const size = compact ? 38 : 44;
-    const emojiBtns = AVATAR_EMOJIS.map(e=>{
-      const sel = this.local.avatarEmoji === e;
-      return `<button data-action="pickAvatarEmoji" data-emoji="${e}" aria-label="Elegir ${e}" style="width:${size}px;height:${size}px;border-radius:12px;border:2px solid ${sel?INK:'var(--line)'};background:${sel?'#FFEDE6':'#fff'};font-size:${compact?18:20}px;display:flex;align-items:center;justify-content:center;transition:border-color .15s,background .15s">${e}</button>`;
+    const av = this.local.avatar;
+    const previewSize = compact ? 76 : 96;
+    const rows = AVATAR_TRAITS.map(t=>{
+      const idx = av[t.key] || 0;
+      return `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:${compact?7:9}px 0;border-top:2px solid var(--panel-line)">
+        <div style="font-weight:800;font-size:14px;width:70px;flex:0 0 auto">${t.label}</div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <button data-action="avatarPrev" data-trait="${t.key}" data-count="${t.count}" aria-label="${t.label} anterior" style="width:32px;height:32px;border-radius:10px;border:2px solid ${INK};background:#fff;font-weight:800;font-size:15px;display:flex;align-items:center;justify-content:center">◀</button>
+          <div style="min-width:32px;text-align:center;font-weight:800;font-size:12px;color:var(--muted)">${idx+1}/${t.count}</div>
+          <button data-action="avatarNext" data-trait="${t.key}" data-count="${t.count}" aria-label="${t.label} siguiente" style="width:32px;height:32px;border-radius:10px;border:2px solid ${INK};background:#fff;font-weight:800;font-size:15px;display:flex;align-items:center;justify-content:center">▶</button>
+        </div>
+      </div>`;
     }).join('');
-    const colorBtns = PALETTE.map(c=>{
-      const sel = this.local.avatarColor === c;
-      return `<button data-action="pickAvatarColor" data-color="${c}" aria-label="Elegir color" style="width:${compact?28:32}px;height:${compact?28:32}px;border-radius:50%;background:${c};border:2px solid ${INK};box-shadow:${sel?'0 0 0 3px #fff, 0 0 0 5px '+INK:'none'};transition:box-shadow .15s"></button>`;
-    }).join('');
-    return `<div style="display:flex;flex-direction:column;gap:10px">
-      <div style="display:flex;align-items:center;gap:12px">
-        <div class="avatar" style="width:${compact?46:56}px;height:${compact?46:56}px;background:${this.local.avatarColor};font-size:${compact?22:26}px">${esc(this.local.avatarEmoji)}</div>
-        <div style="font-size:13px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)">Tu avatar</div>
+    return `<div style="display:flex;flex-direction:column;gap:2px">
+      <div style="display:flex;align-items:center;gap:12px;padding-bottom:8px">
+        <div style="width:${previewSize}px;height:${previewSize}px;flex:0 0 auto">${avatarSVG(av, previewSize)}</div>
+        <div style="font-size:13px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)">Armá tu personaje</div>
       </div>
-      <div style="display:flex;flex-wrap:wrap;gap:8px">${emojiBtns}</div>
-      <div style="display:flex;flex-wrap:wrap;gap:8px">${colorBtns}</div>
+      ${rows}
     </div>`;
   }
   refreshAvatarUI(){
@@ -831,7 +885,7 @@ class Game {
       if(!p) return `<div style="display:flex;align-items:center;gap:12px;padding:12px;border-radius:20px;border:2px dashed var(--dashed);animation:breathe 2s ease-in-out infinite"><div style="flex:0 0 auto;width:46px;height:46px;border-radius:50%;border:2px dashed var(--dashed)"></div><div style="font-size:15px;font-weight:700;color:var(--muted)">Esperando…</div></div>`;
       const tag = p.id===this.myId ? (p.id===hostId?'Vos · Anfitrión':'Vos') : (p.id===hostId?'Anfitrión':'Listo para jugar');
       return `<div style="display:flex;align-items:center;gap:12px;padding:12px;border-radius:20px;background:#fff;border:2px solid ${INK};box-shadow:0 3px 0 ${INK};animation:pop .45s cubic-bezier(.3,1.5,.5,1) both">
-        <div class="avatar" style="width:46px;height:46px;background:${p.color};font-size:20px">${this.avatarInner(p)}</div>
+        <div style="width:46px;height:46px;flex:0 0 auto">${avatarSVG(p.avatar,46)}</div>
         <div style="min-width:0;display:flex;flex-direction:column;gap:1px"><div style="font-weight:800;font-size:17px;overflow:hidden;text-overflow:ellipsis">${esc(p.name)}</div><div style="font-size:13px;font-weight:600;color:var(--muted)">${tag}</div></div>
       </div>`;
     }).join('');
@@ -864,7 +918,7 @@ class Game {
     const s = this.state, pl = this.players();
     const dots = pl.map(p=>{
       const done = !!s.done[p.id];
-      return `<div style="position:relative;width:38px;height:38px;border-radius:50%;background:${p.color};border:2px solid ${INK};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:16px;opacity:${done?1:0.45};transition:opacity .3s">${this.avatarInner(p)}${done?`<div style="position:absolute;right:-5px;bottom:-5px;width:20px;height:20px;border-radius:50%;background:${MINT};border:2px solid ${INK};display:flex;align-items:center;justify-content:center;animation:pop .4s both">${this.iconCheckSmall()}</div>`:''}</div>`;
+      return `<div style="position:relative;width:38px;height:38px;opacity:${done?1:0.45};transition:opacity .3s">${avatarSVG(p.avatar,38)}${done?`<div style="position:absolute;right:-5px;bottom:-5px;width:20px;height:20px;border-radius:50%;background:${MINT};border:2px solid ${INK};display:flex;align-items:center;justify-content:center;animation:pop .4s both">${this.iconCheckSmall()}</div>`:''}</div>`;
     }).join('');
     const doneNames = pl.filter(p=>p.id!==this.myId && s.done[p.id]).map(p=>p.name);
     const statusText = doneNames.length ? listJoin(doneNames)+(doneNames.length>1?' ya terminaron':' ya terminó') : 'Todos están escribiendo…';
@@ -925,7 +979,7 @@ class Game {
       const done = !!s.done[p.id];
       const label = p.id===this.myId ? p.name+' (vos)' : p.name;
       return `<div style="display:flex;align-items:center;gap:12px;padding:10px 0">
-        <div class="avatar" style="width:42px;height:42px;background:${p.color};font-size:18px">${this.avatarInner(p)}</div>
+        <div style="width:42px;height:42px;flex:0 0 auto">${avatarSVG(p.avatar,42)}</div>
         <div style="flex:1;min-width:0;font-weight:800;font-size:17px">${esc(label)}</div>
         ${done ? `<div style="display:flex;align-items:center;gap:6px;padding:6px 12px;border-radius:999px;background:${MINT};border:2px solid ${INK};font-size:13px;font-weight:800;animation:pop .4s both">${this.iconCheckSmall()}Listo</div>`
                : `<div style="display:flex;align-items:center;gap:6px;padding:6px 12px;border-radius:999px;background:var(--panel-line);font-size:13px;font-weight:800;color:var(--muted)">Escribiendo<span style="display:flex;gap:2px"><span style="animation:blink 1.2s infinite">•</span><span style="animation:blink 1.2s .2s infinite">•</span><span style="animation:blink 1.2s .4s infinite">•</span></span></div>`}
@@ -965,7 +1019,7 @@ class Game {
       const countBg = kind==='solo' ? 'var(--panel-line)' : INK;
       const countFg = kind==='solo' ? 'var(--muted)' : 'var(--cream)';
       const tag = kind==='match' ? '¡Vos también!' : kind==='shared' ? n+' coincidencias' : 'Solo '+(g.pids[0]===this.myId?'vos':(byId[g.pids[0]]?.name||'?'));
-      const avatars = g.pids.map(id=>`<div class="avatar" style="width:30px;height:30px;background:${byId[id]?.color||'#ccc'};font-size:13px">${this.avatarInner(byId[id])}</div>`).join('');
+      const avatars = g.pids.map(id=>`<div style="width:30px;height:30px;flex:0 0 auto">${avatarSVG(byId[id]&&byId[id].avatar,30)}</div>`).join('');
       return `<div style="background:${bg};border:${border};box-shadow:${shadow};color:${fg};border-radius:22px;padding:16px 18px;display:flex;flex-direction:column;gap:12px;animation:pop .45s cubic-bezier(.3,1.5,.5,1) both">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
           <div style="min-width:0;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:30px;letter-spacing:-.01em;overflow-wrap:anywhere">${esc(g.label)}</div>
@@ -1014,7 +1068,7 @@ class Game {
       const label = p.id===this.myId ? p.name+' (vos)' : p.name;
       return `<button data-action="selectPlayer" data-pid="${p.id}" style="display:flex;align-items:center;gap:12px;width:100%;padding:12px 16px 12px 12px;border-radius:20px;background:${p.id===this.myId?'#FFEDE6':'#fff'};border:2px solid ${sel?INK:'var(--line)'};box-shadow:${sel?`0 4px 0 ${INK}`:'none'};text-align:left;color:${INK};animation:rise .4s both;animation-delay:${(i*0.08).toFixed(2)}s">
         <div style="flex:0 0 auto;width:36px;height:36px;border-radius:12px;background:${RANKBG[i]||'#F1E7D8'};border:2px solid ${INK};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:18px">${i+1}</div>
-        <div class="avatar" style="width:42px;height:42px;background:${p.color};font-size:18px">${this.avatarInner(p)}</div>
+        <div style="width:42px;height:42px;flex:0 0 auto">${avatarSVG(p.avatar,42)}</div>
         <div style="flex:1;min-width:0;font-weight:800;font-size:18px">${esc(label)}</div>
         <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:22px">${pts[p.id].total} pts</div>
       </button>`;
@@ -1063,7 +1117,7 @@ class Game {
       const deltaColor = d>0?'#0E8A66':d<0?'#B3341A':'var(--muted)';
       return `<div style="position:absolute;left:0;right:0;top:${idx*86}px;height:72px;display:flex;align-items:center;gap:12px;padding:0 16px 0 10px;border-radius:22px;background:${bg};border:2px solid ${INK};box-shadow:0 4px 0 ${INK};transition:top .9s cubic-bezier(.34,1.45,.64,1)">
         <div style="flex:0 0 auto;width:44px;text-align:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:32px">${idx+1}</div>
-        <div class="avatar" style="width:46px;height:46px;background:${p.color};font-size:20px">${this.avatarInner(p)}</div>
+        <div style="width:46px;height:46px;flex:0 0 auto">${avatarSVG(p.avatar,46)}</div>
         <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
           <div style="font-weight:800;font-size:18px">${esc(label)}</div>
           ${ph?`<div style="font-size:13px;font-weight:800;color:${deltaColor};animation:rise .3s both">${deltaText}</div>`:''}
@@ -1101,7 +1155,7 @@ class Game {
     const podium = pod.map((i,idx)=>{
       const p = byId[nr[i]];
       return `<div style="flex:0 1 130px;min-width:0;display:flex;flex-direction:column;align-items:center;gap:8px;animation:rise .6s both;animation-delay:${(0.2+(2-i)*0.15).toFixed(2)}s">
-        <div class="avatar" style="width:${i===0?'72px':'56px'};height:${i===0?'72px':'56px'};background:${p.color};box-shadow:0 4px 0 ${INK};font-size:24px">${this.avatarInner(p)}</div>
+        <div style="width:${i===0?72:56}px;height:${i===0?72:56}px;flex:0 0 auto">${avatarSVG(p.avatar, i===0?72:56)}</div>
         <div style="font-weight:800;font-size:16px;text-align:center">${esc(p.name)}</div>
         <div style="width:100%;height:${H[i]};border-radius:18px 18px 0 0;background:${PBG[i]};border:2.5px solid ${INK};border-bottom:0;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding-top:10px;gap:2px">
           <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:40px;line-height:1">${i+1}</div>
@@ -1113,7 +1167,7 @@ class Game {
       const label = id===this.myId ? byId[id].name+' (vos)' : byId[id].name;
       return `<div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:${i<nr.length-1?'2px solid var(--panel-line)':'0'}">
         <div style="width:28px;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:20px">${i+1}</div>
-        <div class="avatar" style="width:38px;height:38px;background:${byId[id].color};font-size:16px">${this.avatarInner(byId[id])}</div>
+        <div style="width:38px;height:38px;flex:0 0 auto">${avatarSVG(byId[id].avatar,38)}</div>
         <div style="flex:1;min-width:0;font-weight:800;font-size:17px">${esc(label)}</div>
         <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:20px">${tot[id]} pts</div>
       </div>`;

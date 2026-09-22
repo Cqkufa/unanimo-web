@@ -6,7 +6,7 @@ Juego de fiesta multijugador para jugar en grupo, cada uno desde su propio celul
 
 Jugá una partida en vivo: creá una sala, compartí el código de 5 letras, y arranquen cuando estén todos.
 
-Cada jugador elige su nombre y un avatar (emoji + color) al entrar. Hay efectos de sonido (clics, alguien se une — silenciables con el ícono de parlante) y un chat flotante para hablar con el resto durante la partida.
+Cada jugador arma su propio personaje al entrar: elige nombre y, con flechitas, el color de piel, ojos, nariz, boca y un sombrero opcional (dibujado en SVG, sin imágenes externas). Hay efectos de sonido (clics, alguien se une — silenciables con el ícono de parlante) y un chat flotante para hablar con el resto durante la partida.
 
 ## Cómo jugar
 
