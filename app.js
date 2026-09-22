@@ -202,6 +202,17 @@ class Game {
       this.broadcastState();
       if(!wasLate) this.checkAllDone();
     }
+    else if(msg.type === 'draft'){
+      // Lightweight, host-only checkpoint of a guest's in-progress words.
+      // Never part of this.state (never broadcast) so it can't leak
+      // still-being-typed answers to other players before reveal — it only
+      // exists so the round watchdog has something better than "[]" to
+      // fall back to if that player's final submit never arrives at all
+      // (e.g. their tab got backgrounded and its timer stopped firing).
+      if(msg.round !== this.state.round) return;
+      this.hostDrafts = this.hostDrafts || {};
+      this.hostDrafts[msg.id] = msg.words;
+    }
     else if(msg.type === 'leave'){
       this.state.players = this.state.players.filter(p=>p.id!==msg.id);
       delete this.state.done[msg.id];
@@ -272,12 +283,21 @@ class Game {
     this.state.done = {};
     this.state.phase = 'round';
     this.state.stage = (this.state.stage||0) + 1;
+    this.hostDrafts = {};
     this.broadcastState();
     clearInterval(this.hostWatch);
     this.hostWatch = setInterval(()=>{
       if(!this.isHost || this.state.phase!=='round' || this.state.round!==r) { clearInterval(this.hostWatch); return; }
       if(Date.now() >= this.state.roundEndAt + 9000){
-        this.players().forEach(p=>{ if(!this.state.done[p.id]){ if(!this.state.answers[r]) this.state.answers[r]={}; this.state.answers[r][p.id] = this.state.answers[r][p.id]||[]; this.state.done[p.id]=true; } });
+        this.players().forEach(p=>{
+          if(this.state.done[p.id]) return;
+          if(!this.state.answers[r]) this.state.answers[r]={};
+          // Prefer their last known draft (whatever they'd typed before we
+          // lost contact) over an outright empty answer.
+          const draft = this.hostDrafts && this.hostDrafts[p.id];
+          this.state.answers[r][p.id] = this.state.answers[r][p.id] || draft || [];
+          this.state.done[p.id] = true;
+        });
         this.broadcastState();
         clearInterval(this.hostWatch);
         this.hostStartReveal();
@@ -398,6 +418,7 @@ class Game {
         const i = Number(t.dataset.index);
         this.local.inputs[i] = t.value.slice(0,24);
         this.patchWordMeta();
+        this.queueDraft();
       }
     });
     document.body.addEventListener('keydown', e=>{
@@ -431,6 +452,21 @@ class Game {
     const filled = this.local.inputs.filter(x=>norm(x)).length;
     const fc = this.root.querySelector('[data-el="filledCount"]');
     if(fc) fc.textContent = filled+' / '+this.state.config.words;
+  }
+
+  // Debounced checkpoint of in-progress words sent to the host, so a
+  // background-throttled tab (screen lock, app switch) that never fires its
+  // own timeout-submit still leaves the host something better than nothing
+  // to fall back to. Host only needs this from guests — its own inputs are
+  // already its local source of truth.
+  queueDraft(){
+    if(this.isHost || !this.state) return;
+    clearTimeout(this._draftTimer);
+    this._draftTimer = setTimeout(()=>{
+      if(this.local.screen!=='round' || this.local.submitted || !this.state) return;
+      const words = this.local.inputs.map(v=>v.trim()).filter(Boolean);
+      this.sendAction('draft', { id:this.myId, round:this.state.round, words });
+    }, 600);
   }
 
   get actions(){
