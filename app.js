@@ -170,36 +170,46 @@ class Game {
     this.renderHud();
   }
 
-  /* ---------- lobby music: a gentle looping chord pad, synthesized —
-     no audio files, muted by the same sound toggle as everything else. */
+  /* ---------- lobby music: an upbeat, bouncy little loop, synthesized —
+     no audio files, muted by the same sound toggle as everything else.
+     Short plucky "stabs" on a steady beat instead of long sustained pads,
+     so it actually feels festive rather than ambient/moody. */
   startLobbyMusic(){
     if(!this.soundOn || this._musicPlaying) return;
     const ctx = ensureAudio(); if(!ctx) return;
     this._musicPlaying = true;
-    if(!this._musicGain){ this._musicGain = ctx.createGain(); this._musicGain.gain.value = 0.055; this._musicGain.connect(ctx.destination); }
+    if(!this._musicGain){ this._musicGain = ctx.createGain(); this._musicGain.gain.value = 0.07; this._musicGain.connect(ctx.destination); }
+    const N = {C3:130.81,F3:174.61,G3:196.00,A3:220.00,C4:261.63,D4:293.66,E4:329.63,F4:349.23,G4:392.00,A4:440.00,B4:493.88,C5:523.25,D5:587.33,E5:659.25};
+    // I - vi - IV - V, the classic bright/happy pop loop.
     const chords = [
-      [261.63, 329.63, 392.00, 523.25], // Cmaj
-      [220.00, 261.63, 329.63, 440.00], // Am
-      [174.61, 220.00, 261.63, 349.23], // Fmaj
-      [196.00, 246.94, 293.66, 392.00], // Gmaj
+      {bass:N.C3, tri:[N.C4,N.E4,N.G4], sparkle:N.C5},
+      {bass:N.A3, tri:[N.A4,N.C5,N.E5], sparkle:N.E5},
+      {bass:N.F3, tri:[N.F4,N.A4,N.C5], sparkle:N.F4*2},
+      {bass:N.G3, tri:[N.G4,N.B4,N.D5], sparkle:N.D5},
     ];
-    let i = 0;
-    const step = ()=>{
-      if(!this._musicPlaying) return;
-      const notes = chords[i % chords.length]; i++;
-      const t0 = ctx.currentTime;
-      notes.forEach((freq,k)=>{
-        const osc = ctx.createOscillator(), g = ctx.createGain();
-        osc.type = 'sine'; osc.frequency.value = freq;
-        g.gain.setValueAtTime(0, t0);
-        g.gain.linearRampToValueAtTime(k===0?1:0.5, t0+0.7);
-        g.gain.linearRampToValueAtTime(0, t0+3.4);
-        osc.connect(g).connect(this._musicGain);
-        osc.start(t0); osc.stop(t0+3.5);
-      });
-      this._musicTimer = setTimeout(step, 3100);
+    const beat = 0.24; // seconds/beat — a bouncy, quick tempo
+    let step = 0;
+    const pluck = (freq, t0, dur, peak, type)=>{
+      const osc = ctx.createOscillator(), g = ctx.createGain();
+      osc.type = type; osc.frequency.value = freq;
+      g.gain.setValueAtTime(0, t0);
+      g.gain.linearRampToValueAtTime(peak, t0+0.012);
+      g.gain.exponentialRampToValueAtTime(0.001, t0+dur);
+      osc.connect(g).connect(this._musicGain);
+      osc.start(t0); osc.stop(t0+dur+0.02);
     };
-    step();
+    const tick = ()=>{
+      if(!this._musicPlaying) return;
+      const c = chords[Math.floor(step/4) % chords.length];
+      const beatInChord = step % 4;
+      const t0 = ctx.currentTime;
+      pluck(c.bass, t0, 0.22, 0.5, 'triangle'); // bouncy bass on every beat
+      if(beatInChord===0) c.tri.forEach(f=>pluck(f, t0, 0.3, 0.22, 'square')); // bright chord stab on the downbeat
+      if(beatInChord===2) pluck(c.sparkle, t0, 0.22, 0.16, 'triangle'); // little upbeat sparkle
+      step++;
+      this._musicTimer = setTimeout(tick, beat*1000);
+    };
+    tick();
   }
   stopLobbyMusic(){
     this._musicPlaying = false;
