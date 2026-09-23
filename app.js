@@ -324,7 +324,7 @@ class Game {
       this.broadcastState();
     }
     else if(msg.type === 'submit'){
-      if(msg.round !== this.state.g.round) return;
+      if(this.state.gameId!=='unanimo' || !this.state.g || msg.round !== this.state.g.round) return;
       // A player is only truly "done" once we hold a real (possibly empty-
       // by-choice) submission for them. The round watchdog force-fills
       // stragglers with [] so the game can move on; that placeholder must
@@ -350,13 +350,41 @@ class Game {
       // exists so the round watchdog has something better than "[]" to
       // fall back to if that player's final submit never arrives at all
       // (e.g. their tab got backgrounded and its timer stopped firing).
-      if(msg.round !== this.state.g.round) return;
+      if(this.state.gameId!=='unanimo' || !this.state.g || msg.round !== this.state.g.round) return;
       this.hostDrafts = this.hostDrafts || {};
       this.hostDrafts[msg.id] = msg.words;
     }
     else if(msg.type === 'leave'){
       this.state.players = this.state.players.filter(p=>p.id!==msg.id);
-      delete this.state.g.done[msg.id];
+      if(this.state.g && this.state.g.done && !Array.isArray(this.state.g.done)) delete this.state.g.done[msg.id];
+      this.broadcastState();
+    }
+    else if(msg.type === 'tfDraft'){
+      if(this.state.gameId!=='tuttifrutti' || !this.state.g || msg.round !== this.state.g.round) return;
+      this.tfDrafts = this.tfDrafts || {};
+      this.tfDrafts[msg.id] = msg.answers;
+    }
+    else if(msg.type === 'tfStop'){
+      if(this.state.gameId!=='tuttifrutti' || !this.state.g || msg.round !== this.state.g.round || this.state.phase!=='tfWrite') return;
+      this.tfHostLock(msg.id, msg.answers, msg.round, msg.elapsed);
+    }
+    else if(msg.type === 'tfSubmit'){
+      if(this.state.gameId!=='tuttifrutti' || !this.state.g || msg.round !== this.state.g.round) return;
+      if(!this.state.g.answers[msg.round]) this.state.g.answers[msg.round] = {};
+      if(!this.state.g.done[msg.round]) this.state.g.done[msg.round] = {};
+      if(this.state.g.done[msg.round][msg.id]) return;
+      this.state.g.answers[msg.round][msg.id] = msg.answers;
+      this.state.g.done[msg.round][msg.id] = true;
+      this.broadcastState();
+    }
+    else if(msg.type === 'tfFlag'){
+      if(this.state.gameId!=='tuttifrutti' || !this.state.g) return;
+      const r = msg.round; const key = msg.cat+'|'+msg.pid;
+      if(!this.state.g.flags[r]) this.state.g.flags[r] = {};
+      const arr = this.state.g.flags[r][key] || [];
+      const i = arr.indexOf(msg.by);
+      if(i>=0) arr.splice(i,1); else arr.push(msg.by);
+      this.state.g.flags[r][key] = arr;
       this.broadcastState();
     }
   }
@@ -411,6 +439,16 @@ class Game {
       }
       if(s.phase === 'lobby'){
         this.clearTimers();
+      }
+      if(s.phase === 'tfWrite'){
+        this.local.tfInputs = {};
+        this.local.tfSubmittedRound = -1;
+        this.local.tfIntro = true;
+        this.tfStartLocalTimer();
+        this.later(()=>{ this.local.tfIntro=false; this.renderScreen(); }, 1500);
+      }
+      if(s.phase === 'tfReview'){
+        this.tfSubmitMyAnswers();
       }
       this.renderScreen();
       return;
@@ -492,6 +530,202 @@ class Game {
     this.state.phase = 'lobby';
     this.state.stage = (this.state.stage||0) + 1;
     this.local.hostFlow = null;
+    this.broadcastState();
+  }
+
+  /* ================= TUTTI FRUTTI ================= */
+  confirmTfConfig(){
+    if(!this.isHost) return;
+    if(this.tfDraft.categories.length < 3){ this.toast('Elegí al menos 3 categorías', CORAL); return; }
+    this.state.gameId = 'tuttifrutti';
+    this.state.gameConfig = { ...this.tfDraft, categories:[...this.tfDraft.categories] };
+    this.state.g = { round:-1, letter:'', usedLetters:[], roundEndAt:0, locked:false, answers:[], done:[], flags:[], stoppedBy:[], stopMs:[] };
+    this.state.stage = (this.state.stage||0) + 1;
+    this.local.hostFlow = null;
+    this.broadcastState();
+  }
+  tfStartGame(){
+    if(!this.isHost) return;
+    this.state.g.answers = []; this.state.g.done = []; this.state.g.flags = [];
+    this.state.g.usedLetters = []; this.state.g.stoppedBy = []; this.state.g.stopMs = [];
+    this.tfStartRound(0);
+  }
+  tfStartRound(r){
+    const letter = pickLetter(this.state.g.usedLetters, this.state.gameConfig.hard);
+    this.state.g.usedLetters = [...this.state.g.usedLetters, letter];
+    this.state.g.round = r;
+    this.state.g.letter = letter;
+    this.state.g.roundEndAt = Date.now() + this.state.gameConfig.time*1000;
+    this.state.g.locked = false;
+    this.state.g.answers[r] = {};
+    this.state.g.done[r] = {};
+    this.state.g.flags[r] = {};
+    this.state.phase = 'tfWrite';
+    this.state.stage = (this.state.stage||0) + 1;
+    this.tfDrafts = {};
+    this.broadcastState();
+    clearInterval(this.tfWatch);
+    this.tfWatch = setInterval(()=>{
+      if(!this.isHost || this.state.phase!=='tfWrite' || this.state.g.round!==r){ clearInterval(this.tfWatch); return; }
+      if(Date.now() >= this.state.g.roundEndAt){ clearInterval(this.tfWatch); this.tfHostLock(null, null, r, this.state.gameConfig.time*1000); }
+    }, 500);
+  }
+  // Host-only: STOP (or timeout) locks the round for everyone at once.
+  // If someone actively pressed STOP their answers arrive right here with
+  // the lock; everyone else submits their in-progress answers the moment
+  // their client is forced into the review phase (see tfSubmitMyAnswers).
+  tfHostLock(stopperId, stopperAnswers, r, elapsedMs){
+    if(!this.isHost) return;
+    if(this.state.phase!=='tfWrite' || this.state.g.round!==r) return;
+    clearInterval(this.tfWatch);
+    this.state.g.locked = true;
+    if(stopperId){
+      this.state.g.answers[r][stopperId] = stopperAnswers||{};
+      this.state.g.done[r][stopperId] = true;
+      this.state.g.stoppedBy[r] = stopperId;
+      this.state.g.stopMs[r] = elapsedMs;
+    }
+    this.state.phase = 'tfReview';
+    this.state.stage = (this.state.stage||0) + 1;
+    this.broadcastState();
+    this.later(()=>{
+      if(!this.isHost || this.state.phase!=='tfReview' || this.state.g.round!==r) return;
+      let changed = false;
+      this.players().forEach(p=>{
+        if(!this.state.g.done[r][p.id]){
+          const draft = this.tfDrafts && this.tfDrafts[p.id];
+          this.state.g.answers[r][p.id] = this.state.g.answers[r][p.id] || draft || {};
+          this.state.g.done[r][p.id] = true;
+          changed = true;
+        }
+      });
+      if(changed) this.broadcastState();
+    }, 3500);
+  }
+  tfSubmitMyAnswers(){
+    if(!this.state) return;
+    const r = this.state.g.round;
+    if(this.local.tfSubmittedRound === r) return; // I was the stopper, already sent with the lock
+    this.local.tfSubmittedRound = r;
+    const answers = {...this.local.tfInputs};
+    if(this.isHost){
+      if(!this.state.g.answers[r]) this.state.g.answers[r] = {};
+      if(!this.state.g.done[r]) this.state.g.done[r] = {};
+      if(!this.state.g.done[r][this.myId]){
+        this.state.g.answers[r][this.myId] = answers;
+        this.state.g.done[r][this.myId] = true;
+        this.broadcastState();
+      }
+    } else {
+      this.sendAction('tfSubmit', { id:this.myId, round:r, answers });
+    }
+  }
+  tfQueueDraft(){
+    if(this.isHost || !this.state) return;
+    clearTimeout(this._tfDraftTimer);
+    this._tfDraftTimer = setTimeout(()=>{
+      if(this.local.screen!=='tfWrite' || !this.state) return;
+      this.sendAction('tfDraft', { id:this.myId, round:this.state.g.round, answers:{...this.local.tfInputs} });
+    }, 600);
+  }
+  tfPressStop(){
+    if(this.local.screen!=='tfWrite') return;
+    if(this.local.tfSubmittedRound === this.state.g.round) return;
+    this.local.tfSubmittedRound = this.state.g.round;
+    const answers = {...this.local.tfInputs};
+    const elapsed = Date.now() - (this.state.g.roundEndAt - this.state.gameConfig.time*1000);
+    clearInterval(this.tick);
+    if(this.isHost){ this.tfHostLock(this.myId, answers, this.state.g.round, elapsed); }
+    else { this.sendAction('tfStop', { id:this.myId, round:this.state.g.round, answers, elapsed }); }
+  }
+  tfToggleFlag(cat, pid){
+    if(!this.state || pid===this.myId) return; // can't flag your own answer
+    const r = this.state.g.round;
+    if(this.isHost){
+      const key = cat+'|'+pid;
+      if(!this.state.g.flags[r]) this.state.g.flags[r] = {};
+      const arr = this.state.g.flags[r][key] || [];
+      const i = arr.indexOf(this.myId);
+      if(i>=0) arr.splice(i,1); else arr.push(this.myId);
+      this.state.g.flags[r][key] = arr;
+      this.broadcastState();
+    } else {
+      this.sendAction('tfFlag', { round:r, cat, pid, by:this.myId });
+    }
+    this.renderScreen();
+  }
+  tfStartLocalTimer(){
+    clearInterval(this.tick);
+    this.tick = setInterval(()=>{
+      if(this.local.screen!=='tfWrite'){ clearInterval(this.tick); return; }
+      const left = Math.max(0, Math.round((this.state.g.roundEndAt - Date.now())/1000));
+      this.tfPatchTimer(left);
+      if(left<=0) clearInterval(this.tick);
+      if(left===10) this.toast('¡Quedan 10 segundos!', CORAL);
+    }, 500);
+  }
+  tfPatchTimer(left){
+    const cfg = this.state.gameConfig;
+    const textEl = this.root.querySelector('[data-el="tfTimerText"]');
+    const barEl = this.root.querySelector('[data-el="tfTimerBar"]');
+    const boxEl = this.root.querySelector('[data-el="tfTimerBox"]');
+    if(textEl) textEl.textContent = mmss(left);
+    if(barEl) barEl.style.width = (left/cfg.time*100)+'%';
+    const urgent = left<=10;
+    if(barEl) barEl.style.background = urgent ? CORAL : INK;
+    if(boxEl){ boxEl.style.background = urgent ? CORAL : '#fff'; boxEl.style.animation = urgent ? 'tick 1s ease-in-out infinite' : 'none'; }
+  }
+
+  /* ---------- tutti frutti scoring ---------- */
+  tfValid(r, cat, pid){
+    const ans = (this.state.g.answers[r]||{})[pid] || {};
+    const text = (ans[cat]||'').trim();
+    if(!text) return false;
+    const flags = ((this.state.g.flags[r]||{})[cat+'|'+pid]) || [];
+    if(flags.includes(this.state.hostId) || flags.length>=2) return false;
+    const letter = this.state.g.usedLetters[r] != null ? this.state.g.usedLetters[r] : this.state.g.letter;
+    return norm(text).startsWith(norm(letter));
+  }
+  tfPoints(r){
+    const cfg = this.state.gameConfig; const out = {};
+    this.players().forEach(p=>out[p.id]={items:[],total:0});
+    if(!this.state.g.answers[r]) return out;
+    (cfg.categories||[]).forEach(catId=>{
+      const groups = {};
+      this.players().forEach(p=>{
+        if(!this.tfValid(r,catId,p.id)) return;
+        const ans = (this.state.g.answers[r]||{})[p.id]||{};
+        const k = norm(ans[catId]);
+        (groups[k] = groups[k]||[]).push(p.id);
+      });
+      this.players().forEach(p=>{
+        const ans = (this.state.g.answers[r]||{})[p.id]||{};
+        const text = (ans[catId]||'').trim();
+        const valid = this.tfValid(r,catId,p.id);
+        let pts = 0;
+        if(valid){ const k=norm(text); pts = groups[k].length===1 ? 10 : 5; }
+        out[p.id].items.push({cat:catId, text, valid, pts});
+        out[p.id].total += pts;
+      });
+    });
+    return out;
+  }
+  tfTotals(uptoRound){
+    const t = {}; this.players().forEach(p=>t[p.id]=0);
+    for(let r=0;r<=uptoRound;r++){ if(!this.state.g.answers[r]) continue; const pts=this.tfPoints(r); for(const id in pts) t[id]=(t[id]||0)+pts[id].total; }
+    return t;
+  }
+  tfNext(){
+    if(!this.isHost) return;
+    if(this.state.g.round+1 < this.state.gameConfig.rounds){ this.tfStartRound(this.state.g.round+1); }
+    else { this.state.phase='tfFinal'; this.state.stage=(this.state.stage||0)+1; this.broadcastState(); }
+  }
+  tfPlayAgain(){
+    if(!this.isHost) return;
+    this.state.g.answers=[]; this.state.g.done=[]; this.state.g.flags=[];
+    this.state.g.usedLetters=[]; this.state.g.stoppedBy=[]; this.state.g.stopMs=[]; this.state.g.round=-1;
+    this.state.phase='lobby';
+    this.state.stage=(this.state.stage||0)+1;
     this.broadcastState();
   }
 
@@ -662,6 +896,10 @@ class Game {
       // Chat draft is tracked quietly (no re-render) so typing never fights
       // the user for cursor position — the panel only rebuilds on send/receive.
       else if(t.dataset.role === 'chat-input'){ this.local.chatDraft = t.value.slice(0,240); }
+      else if(t.dataset.role === 'tf-input'){
+        this.local.tfInputs[t.dataset.cat] = t.value.slice(0,24);
+        this.tfQueueDraft();
+      }
     });
     document.body.addEventListener('keydown', e=>{
       const t = e.target;
@@ -674,6 +912,13 @@ class Game {
         const n = this.local.inputs.length;
         if(i < n-1){ const next = this.root.querySelector(`[data-role="word-input"][data-index="${i+1}"]`); if(next) next.focus(); }
         else this.submit(false);
+      }
+      if(t.dataset.role === 'tf-input' && e.key==='Enter'){
+        e.preventDefault();
+        const i = Number(t.dataset.index);
+        const n = this.state ? (this.state.gameConfig.categories||[]).length : 0;
+        if(i < n-1){ const next = this.root.querySelector(`[data-role="tf-input"][data-index="${i+1}"]`); if(next) next.focus(); }
+        else this.tfPressStop();
       }
     });
   }
@@ -740,10 +985,25 @@ class Game {
       incWords: ()=>{ this.uDraft.words = clamp(this.uDraft.words+1,3,8); this.renderScreen(); },
       setRounds: (t)=>{ this.uDraft.rounds = Number(t.dataset.val); this.renderScreen(); },
       setTime: (t)=>{ this.uDraft.time = Number(t.dataset.val); this.renderScreen(); },
+      tfSetRounds: (t)=>{ this.tfDraft.rounds = Number(t.dataset.val); this.renderScreen(); },
+      tfSetTime: (t)=>{ this.tfDraft.time = Number(t.dataset.val); this.renderScreen(); },
+      tfToggleCategory: (t)=>{
+        const id = t.dataset.cat;
+        const i = this.tfDraft.categories.indexOf(id);
+        if(i>=0) this.tfDraft.categories.splice(i,1); else this.tfDraft.categories.push(id);
+        this.renderScreen();
+      },
+      tfToggleHard: ()=>{ this.tfDraft.hard = !this.tfDraft.hard; this.renderScreen(); },
+      tfPressStop: ()=>this.tfPressStop(),
+      tfFlag: (t)=>{ this.tfToggleFlag(t.dataset.cat, t.dataset.pid); },
       submitNow: ()=>this.submit(false),
       revealAll: ()=>{ clearInterval(this.revealTick); this.local.reveal = this.groups(this.state.g.round).length; this.renderScreen(); },
       goScore: ()=>{ this.local.screen='score'; this.local.selPid=this.myId; this.renderScreen(); },
-      goRanking: ()=>{ this.local.screen='ranking'; this.local.rankPhase=0; this.renderScreen(); this.later(()=>{ this.local.rankPhase=1; this.renderScreen(); },900); },
+      goRanking: ()=>{
+        this.local.screen = this.state.gameId==='tuttifrutti' ? 'tfRanking' : 'ranking';
+        this.local.rankPhase=0; this.renderScreen();
+        this.later(()=>{ this.local.rankPhase=1; this.renderScreen(); },900);
+      },
       selectPlayer: (t)=>{ this.local.selPid = t.dataset.pid; this.renderScreen(); },
       nextRound: ()=>{
         if(this.state.gameId==='unanimo') this.uNext();
@@ -779,6 +1039,10 @@ class Game {
     else if(sc==='score') html = this.viewScore();
     else if(sc==='ranking') html = this.viewRanking();
     else if(sc==='final') html = this.viewFinal();
+    else if(sc==='tfWrite') html = this.viewTfWrite();
+    else if(sc==='tfReview') html = this.viewTfReview();
+    else if(sc==='tfRanking') html = this.viewTfRanking();
+    else if(sc==='tfFinal') html = this.viewTfFinal();
     else html = this.viewHome();
 
     this.root.innerHTML = html;
@@ -789,6 +1053,11 @@ class Game {
       this.later(()=>{ const el=this.root.querySelector('[data-role="word-input"][data-index="0"]'); if(el) el.focus({preventScroll:true}); }, 50);
       const left = this.state ? Math.max(0, Math.round((this.state.g.roundEndAt - Date.now())/1000)) : 0;
       this.patchTimer(left);
+    }
+    if(sc==='tfWrite' && !this.local.tfIntro){
+      this.later(()=>{ const el=this.root.querySelector('[data-role="tf-input"][data-index="0"]'); if(el) el.focus({preventScroll:true}); }, 50);
+      const left = this.state ? Math.max(0, Math.round((this.state.g.roundEndAt - Date.now())/1000)) : 0;
+      this.tfPatchTimer(left);
     }
   }
 
@@ -1052,6 +1321,247 @@ class Game {
       <div class="sticky-bottom">
         <div style="text-align:center;font-size:14px;font-weight:700;color:var(--muted)">${estimate}</div>
         <button class="btn-primary" data-action="confirmUnanimoConfig">LISTO, VOLVER AL LOBBY</button>
+      </div>
+    </div>`;
+  }
+
+  /* ================= TUTTI FRUTTI — screens ================= */
+  viewTfConfig(){
+    const cfg = this.tfDraft;
+    const roundOpts = [3,4,5,6,7,8].map(n=>`<button data-action="tfSetRounds" data-val="${n}" style="height:48px;border-radius:14px;border:2px solid ${INK};background:${cfg.rounds===n?INK:'#fff'};color:${cfg.rounds===n?'var(--cream)':INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:18px">${n}</button>`).join('');
+    const timeOpts = [30,45,60,90,120].map(n=>`<button data-action="tfSetTime" data-val="${n}" style="height:48px;border-radius:14px;border:2px solid ${INK};background:${cfg.time===n?INK:'#fff'};color:${cfg.time===n?'var(--cream)':INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:16px">${n}s</button>`).join('');
+    const catChips = TUTTI_CATEGORIES.map(c=>{
+      const on = cfg.categories.includes(c.id);
+      return `<button data-action="tfToggleCategory" data-cat="${c.id}" style="display:flex;align-items:center;gap:8px;padding:10px 14px;border-radius:14px;border:2px solid ${INK};background:${on?MINT:'#fff'};font-weight:800;font-size:14px">${c.icon} ${esc(c.label)}</button>`;
+    }).join('');
+    const estimate = '≈ '+Math.max(1,Math.round(cfg.rounds*(cfg.time+40)/60))+' min de juego';
+    return `<div class="screen screen-narrow">
+      <div class="top-bar"><button class="icon-btn" data-action="backToPicker" aria-label="Volver">${this.iconBack()}</button><div class="heading" style="font-size:28px">Tutti Frutti</div></div>
+      <div style="background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:6px 18px;display:flex;flex-direction:column">
+        <div style="display:flex;flex-direction:column;gap:10px;padding:14px 0;border-bottom:2px solid var(--panel-line)">
+          <div style="font-weight:800;font-size:17px">Rondas</div>
+          <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:6px">${roundOpts}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:10px;padding:14px 0;border-bottom:2px solid var(--panel-line)">
+          <div style="font-weight:800;font-size:17px">Tiempo por ronda</div>
+          <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:6px">${timeOpts}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:10px;padding:14px 0;border-bottom:2px solid var(--panel-line)">
+          <div style="display:flex;align-items:baseline;justify-content:space-between"><div style="font-weight:800;font-size:17px">Categorías</div><div style="font-size:13px;font-weight:700;color:var(--muted)">${cfg.categories.length} elegidas</div></div>
+          <div style="display:flex;flex-wrap:wrap;gap:8px">${catChips}</div>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 0">
+          <div style="display:flex;flex-direction:column;gap:2px"><div style="font-weight:800;font-size:17px">Letras difíciles</div><div style="font-size:14px;color:var(--muted)">Incluye K, Ñ y otras poco comunes</div></div>
+          <button data-action="tfToggleHard" style="width:56px;height:32px;border-radius:999px;border:2px solid ${INK};background:${cfg.hard?MINT:'#F1E7D8'};position:relative;flex:0 0 auto"><span style="position:absolute;top:2px;left:${cfg.hard?'26px':'2px'};width:24px;height:24px;border-radius:50%;background:#fff;border:2px solid ${INK};transition:left .15s"></span></button>
+        </div>
+      </div>
+      <div class="sticky-bottom">
+        <div style="text-align:center;font-size:14px;font-weight:700;color:var(--muted)">${estimate}</div>
+        <button class="btn-primary" data-action="confirmTfConfig">LISTO, VOLVER AL LOBBY</button>
+      </div>
+    </div>`;
+  }
+
+  viewTfWrite(){
+    const s = this.state, cfg = s.gameConfig;
+    if(this.local.tfIntro){
+      return `<div style="min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;text-align:center;padding:20px">
+        <div style="font-size:15px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)">RONDA ${s.g.round+1}</div>
+        <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:15px;letter-spacing:.1em;text-transform:uppercase;animation:rise .3s both">¡LETRA!</div>
+        <div style="width:160px;height:160px;border-radius:32px;background:${YEL};border:3px solid ${INK};box-shadow:0 8px 0 ${INK};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:96px;animation:pop .5s cubic-bezier(.3,1.6,.5,1) both">${esc(s.g.letter)}</div>
+      </div>`;
+    }
+    const fields = (cfg.categories||[]).map((catId,i)=>{
+      const cat = TUTTI_CATEGORIES.find(c=>c.id===catId);
+      const v = this.local.tfInputs[catId] || '';
+      return `<div style="position:relative;display:flex;align-items:center">
+        <div style="position:absolute;left:13px;width:32px;height:32px;border-radius:10px;background:${v?MINT:'#F1E7D8'};border:2px solid ${INK};display:flex;align-items:center;justify-content:center;font-size:16px;pointer-events:none">${cat?cat.icon:'❔'}</div>
+        <input class="field-input" data-role="tf-input" data-cat="${catId}" data-index="${i}" value="${esc(v)}" placeholder="${cat?cat.label:catId}" autocomplete="off" enterkeyhint="next" style="border-color:${v?INK:'#DCCFBC'}">
+      </div>`;
+    }).join('');
+    return `<div style="min-height:100vh;display:flex;flex-direction:column">
+      <div style="position:sticky;top:0;z-index:10;background:var(--cream)">
+        <div style="max-width:1080px;margin:0 auto;padding:12px 20px;display:flex;align-items:center;gap:12px">
+          <button class="icon-btn" data-action="askLeave" aria-label="Salir">${this.iconClose()}</button>
+          <div style="flex:1;min-width:0;display:flex;align-items:baseline;gap:6px;font-family:'Bricolage Grotesque',sans-serif;font-weight:800"><span style="font-size:22px">RONDA ${s.g.round+1}</span><span style="font-size:16px;color:var(--muted)">de ${cfg.rounds}</span></div>
+          <div data-el="tfTimerBox" style="display:flex;align-items:center;gap:8px;height:50px;padding:0 16px;border-radius:999px;border:2px solid ${INK};background:#fff;box-shadow:0 3px 0 ${INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:26px;font-variant-numeric:tabular-nums">${this.iconClock()}<span data-el="tfTimerText">${mmss(cfg.time)}</span></div>
+        </div>
+        <div style="height:6px;background:var(--line)"><div data-el="tfTimerBar" style="height:100%;width:100%;background:${INK};transition:width 1s linear,background .3s"></div></div>
+      </div>
+      <div style="flex:1;width:100%;max-width:560px;margin:0 auto;padding:20px 20px 0;display:flex;flex-direction:column;gap:14px">
+        <div style="background:${YEL};border:2.5px solid ${INK};border-radius:24px;box-shadow:0 5px 0 ${INK};padding:16px;display:flex;align-items:center;justify-content:center;gap:14px">
+          <div style="font-size:13px;font-weight:800;letter-spacing:.1em;text-transform:uppercase">Letra</div>
+          <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:44px;line-height:1">${esc(s.g.letter)}</div>
+        </div>
+        ${fields}
+        <div class="sticky-bottom" style="margin:0 -20px;padding:16px 20px 20px">
+          <button class="btn-primary" data-action="tfPressStop" style="height:66px;font-size:26px;background:${CORAL}">🛑 STOP</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  viewTfReview(){
+    const s = this.state, cfg = s.gameConfig, pl = this.players(), byId = {}; pl.forEach(p=>byId[p.id]=p);
+    const r = s.g.round;
+    const pts = this.tfPoints(r);
+    const doneCount = Object.keys(s.g.done[r]||{}).length;
+    const catBlocks = (cfg.categories||[]).map(catId=>{
+      const cat = TUTTI_CATEGORIES.find(c=>c.id===catId);
+      const rows = pl.map(p=>{
+        const item = pts[p.id].items.find(it=>it.cat===catId);
+        if(!item || !item.text) return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;opacity:.5">
+          <div style="width:28px;height:28px;flex:0 0 auto">${avatarSVG(p.avatar,28)}</div>
+          <div style="flex:1;font-size:14px;font-weight:700;font-style:italic;color:var(--muted)">Sin respuesta</div>
+        </div>`;
+        const flagKey = catId+'|'+p.id;
+        const flags = (s.g.flags[r]||{})[flagKey]||[];
+        const flaggedByMe = flags.includes(this.myId);
+        return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0">
+          <div style="width:28px;height:28px;flex:0 0 auto">${avatarSVG(p.avatar,28)}</div>
+          <div style="flex:1;min-width:0;font-weight:800;font-size:16px;overflow-wrap:anywhere">${esc(disp(item.text))} <span style="font-weight:600;font-size:12px;color:var(--muted)">— ${esc(p.name)}</span></div>
+          <div style="flex:0 0 auto;padding:3px 9px;border-radius:999px;background:${item.valid?MINT:'var(--dup-bg)'};border:2px solid ${INK};font-weight:800;font-size:12px">${item.valid?'+'+item.pts:'✕'}</div>
+          ${p.id!==this.myId?`<button data-action="tfFlag" data-cat="${catId}" data-pid="${p.id}" aria-label="Marcar inválida" style="flex:0 0 auto;width:28px;height:28px;border-radius:8px;border:2px solid ${flaggedByMe?CORAL:'var(--line)'};background:${flaggedByMe?'#FFEDE6':'#fff'};font-size:13px">🚩</button>`:''}
+        </div>`;
+      }).join('');
+      return `<div class="card" style="padding:14px 16px">
+        <div style="font-weight:800;font-size:15px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding-bottom:6px">${cat?cat.icon+' '+cat.label:catId}</div>
+        ${rows}
+      </div>`;
+    }).join('');
+    const totalsRow = pl.map(p=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 12px;border-radius:999px;background:#fff;border:2px solid ${INK}"><div style="width:22px;height:22px;flex:0 0 auto">${avatarSVG(p.avatar,22)}</div><span style="font-weight:800;font-size:14px">${esc(p.name)}: +${pts[p.id].total}</span></div>`).join('');
+    const bottom = this.isHost
+      ? `<button class="btn-primary" data-action="goRanking">VER CLASIFICACIÓN</button>`
+      : `<div style="height:54px;border-radius:16px;border:2px solid ${INK};background:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;color:var(--muted)">Revisando respuestas… (${doneCount}/${pl.length})</div>`;
+    return `<div class="screen screen-wide">
+      <div style="display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center">
+        <div style="font-size:13px;font-weight:800;letter-spacing:.14em;text-transform:uppercase">¿QUÉ PUSIERON?</div>
+        <div style="padding:8px 22px;border-radius:18px;background:${YEL};border:2.5px solid ${INK};box-shadow:0 4px 0 ${INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:36px">${esc(s.g.letter)}</div>
+        <div style="font-size:13px;font-weight:700;color:var(--muted)">Tocá 🚩 si te parece que una respuesta no vale</div>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:center">${totalsRow}</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px">${catBlocks}</div>
+      <div class="sticky-bottom">${bottom}</div>
+    </div>`;
+  }
+
+  viewTfRanking(){
+    const s = this.state, cfg = s.gameConfig, pl = this.players();
+    const cur = this.tfTotals(s.g.round), prevT = s.g.round>0 ? this.tfTotals(s.g.round-1) : null;
+    const nr = this.rankOf(cur), orr = prevT ? this.rankOf(prevT) : nr;
+    const ph = this.local.rankPhase===1;
+    const rows = pl.map(p=>{
+      const ni = nr.indexOf(p.id), oi = orr.indexOf(p.id), idx = ph?ni:oi, d = oi-ni;
+      const label = p.id===this.myId ? p.name+' (vos)' : p.name;
+      const total = ph ? cur[p.id] : (prevT ? prevT[p.id] : 0);
+      const bg = p.id===this.myId ? '#FFEDE6' : (idx===0 && ph ? '#FFF3CC' : '#fff');
+      const deltaText = d>0?'▲ Subió '+d : d<0?'▼ Bajó '+(-d) : 'Mantiene el puesto';
+      const deltaColor = d>0?'#0E8A66':d<0?'#B3341A':'var(--muted)';
+      return `<div style="position:absolute;left:0;right:0;top:${idx*86}px;height:72px;display:flex;align-items:center;gap:12px;padding:0 16px 0 10px;border-radius:22px;background:${bg};border:2px solid ${INK};box-shadow:0 4px 0 ${INK};transition:top .9s cubic-bezier(.34,1.45,.64,1)">
+        <div style="flex:0 0 auto;width:44px;text-align:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:32px">${idx+1}</div>
+        <div style="width:46px;height:46px;flex:0 0 auto">${avatarSVG(p.avatar,46)}</div>
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
+          <div style="font-weight:800;font-size:18px">${esc(label)}</div>
+          ${ph?`<div style="font-size:13px;font-weight:800;color:${deltaColor};animation:rise .3s both">${deltaText}</div>`:''}
+        </div>
+        ${ph?`<div style="padding:4px 10px;border-radius:999px;background:${MINT};border:2px solid ${INK};font-weight:800;font-size:14px;animation:pop .4s both">+${cur[p.id]-(prevT?prevT[p.id]:0)}</div>`:''}
+        <div style="flex:0 0 auto;min-width:72px;text-align:right;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:24px">${total} pts</div>
+      </div>`;
+    }).join('');
+    const dots = Array.from({length:cfg.rounds},(_,i)=>`<div style="width:${i===s.g.round?'36px':'14px'};height:10px;border-radius:999px;background:${i<=s.g.round?INK:'#fff'};border:2px solid ${INK};transition:width .3s"></div>`).join('');
+    const isLast = s.g.round+1 >= cfg.rounds;
+    const bottom = this.isHost
+      ? `<button class="btn-primary" data-action="nextRound">${isLast?'VER RESULTADO FINAL':'SIGUIENTE RONDA'}</button>`
+      : `<div style="height:62px;border-radius:18px;border:2px solid ${INK};background:#fff;display:flex;align-items:center;justify-content:center;gap:10px;font-weight:800;font-size:17px">${esc(this.playerById(s.hostId)?.name||'El anfitrión')} va a continuar<span style="display:flex;gap:3px"><span style="animation:blink 1.2s infinite">•</span><span style="animation:blink 1.2s .2s infinite">•</span><span style="animation:blink 1.2s .4s infinite">•</span></span></div>`;
+    return `<div class="screen">
+      <div style="display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center">
+        <div class="heading" style="font-size:clamp(36px,10vw,52px);letter-spacing:-.02em;line-height:1">CLASIFICACIÓN</div>
+        <div style="font-size:16px;font-weight:700;color:var(--muted)">Después de la ronda ${s.g.round+1} de ${cfg.rounds}</div>
+      </div>
+      <div style="display:flex;gap:6px;justify-content:center">${dots}</div>
+      <div style="position:relative;height:${pl.length*86}px">${rows}</div>
+      <div class="sticky-bottom">${bottom}</div>
+    </div>`;
+  }
+
+  viewTfFinal(){
+    const s = this.state, cfg = s.gameConfig, pl = this.players(), byId = {}; pl.forEach(p=>byId[p.id]=p);
+    const tot = this.tfTotals(cfg.rounds-1);
+    const nr = this.rankOf(tot);
+    const w = byId[nr[0]];
+    const winnerTitle = w.id===this.myId ? '¡GANASTE, '+w.name.toUpperCase()+'!' : w.name.toUpperCase()+' GANÓ';
+    const pod = [1,0,2].filter(i=>nr[i]);
+    const H=['170px','124px','92px'], PBG=[YEL,'#E4DEF5','#F6BE9E'];
+    const podium = pod.map((i)=>{
+      const p = byId[nr[i]];
+      return `<div style="flex:0 1 130px;min-width:0;display:flex;flex-direction:column;align-items:center;gap:8px;animation:rise .6s both;animation-delay:${(0.2+(2-i)*0.15).toFixed(2)}s">
+        <div style="width:${i===0?72:56}px;height:${i===0?72:56}px;flex:0 0 auto">${avatarSVG(p.avatar, i===0?72:56)}</div>
+        <div style="font-weight:800;font-size:16px;text-align:center">${esc(p.name)}</div>
+        <div style="width:100%;height:${H[i]};border-radius:18px 18px 0 0;background:${PBG[i]};border:2.5px solid ${INK};border-bottom:0;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding-top:10px;gap:2px">
+          <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:40px;line-height:1">${i+1}</div>
+          <div style="font-weight:800;font-size:14px">${tot[p.id]} pts</div>
+        </div>
+      </div>`;
+    }).join('');
+    const finalRows = nr.map((id,i)=>{
+      const label = id===this.myId ? byId[id].name+' (vos)' : byId[id].name;
+      return `<div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:${i<nr.length-1?'2px solid var(--panel-line)':'0'}">
+        <div style="width:28px;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:20px">${i+1}</div>
+        <div style="width:38px;height:38px;flex:0 0 auto">${avatarSVG(byId[id].avatar,38)}</div>
+        <div style="flex:1;min-width:0;font-weight:800;font-size:17px">${esc(label)}</div>
+        <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:20px">${tot[id]} pts</div>
+      </div>`;
+    }).join('');
+
+    // stats
+    let bestRound = null, uniqueCount={}, sharedCount={}, stopCount={}, fastestStop=null;
+    pl.forEach(p=>{ uniqueCount[p.id]=0; sharedCount[p.id]=0; stopCount[p.id]=0; });
+    for(let r=0;r<cfg.rounds;r++){
+      if(!s.g.answers[r]) continue;
+      const pts = this.tfPoints(r);
+      pl.forEach(p=>{
+        const rt = pts[p.id].total;
+        if(!bestRound || rt>bestRound.pts) bestRound = {pid:p.id, pts:rt, r};
+        pts[p.id].items.forEach(it=>{ if(it.pts===10) uniqueCount[p.id]++; if(it.pts===5) sharedCount[p.id]++; });
+      });
+      const sb = s.g.stoppedBy[r];
+      if(sb) stopCount[sb] = (stopCount[sb]||0)+1;
+      if(sb && s.g.stopMs[r]!=null && (!fastestStop || s.g.stopMs[r]<fastestStop.ms)) fastestStop = {pid:sb, ms:s.g.stopMs[r]};
+    }
+    const topBy = (obj)=>Object.entries(obj).sort((a,b)=>b[1]-a[1])[0];
+    const uniqueTop = topBy(uniqueCount), sharedTop = topBy(sharedCount), stopTop = topBy(stopCount);
+    const stats = [
+      bestRound && {label:'Mayor puntuación en una ronda', value:(byId[bestRound.pid]?.name||'?')+' · +'+bestRound.pts, sub:'Ronda '+(bestRound.r+1), bg:CORAL},
+      fastestStop && {label:'STOP más rápido', value:(byId[fastestStop.pid]?.name||'?'), sub:(fastestStop.ms/1000).toFixed(1)+'s', bg:YEL},
+      uniqueTop && uniqueTop[1]>0 && {label:'Más respuestas únicas', value:(byId[uniqueTop[0]]?.name||'?'), sub:uniqueTop[1]+' únicas (+10 c/u)', bg:VIOLET},
+      sharedTop && sharedTop[1]>0 && {label:'Más respuestas coincidentes', value:(byId[sharedTop[0]]?.name||'?'), sub:sharedTop[1]+' compartidas', bg:MINT},
+      stopTop && stopTop[1]>0 && {label:'Más veces gritó STOP', value:(byId[stopTop[0]]?.name||'?'), sub:stopTop[1]+' rondas', bg:BLUE},
+    ].filter(Boolean).map((x,i)=>({...x, delay:(0.5+i*0.1)+'s'}));
+    const statsHtml = stats.map(x=>`<div style="background:${x.bg};border:2px solid ${INK};border-radius:22px;box-shadow:0 4px 0 ${INK};padding:16px;display:flex;flex-direction:column;gap:6px;animation:rise .5s both;animation-delay:${x.delay}">
+      <div style="font-size:12px;font-weight:800;letter-spacing:.1em;text-transform:uppercase">${esc(x.label)}</div>
+      <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:26px;line-height:1.05;overflow-wrap:anywhere">${esc(x.value)}</div>
+      <div style="font-size:14px;font-weight:700">${esc(x.sub)}</div>
+    </div>`).join('');
+    const confettiHtml = this.confetti.map(c=>`<div style="position:absolute;top:-20px;left:${c.left};width:${c.w};height:${c.h};border-radius:3px;background:${c.color};border:1.5px solid ${INK};animation:fall ${c.dur} linear ${c.delay} infinite"></div>`).join('');
+    const bottom = this.isHost
+      ? `<button class="btn-primary" data-action="playAgain">JUGAR DE NUEVO</button><button class="btn-secondary" data-action="backToPortal">ELEGIR OTRO JUEGO</button>`
+      : `<div style="height:54px;border-radius:16px;border:2px solid ${INK};background:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;color:var(--muted)">Esperando a ${esc(this.playerById(s.hostId)?.name||'el anfitrión')}…</div>`;
+    return `<div style="position:relative;min-height:100vh;overflow:hidden">
+      <div style="position:fixed;inset:0;pointer-events:none;z-index:1;overflow:hidden">${confettiHtml}</div>
+      <div style="position:relative;z-index:2;max-width:1080px;margin:0 auto;padding:28px 20px 0;display:flex;flex-direction:column;gap:28px">
+        <div style="display:flex;flex-direction:column;align-items:center;gap:8px;text-align:center">
+          <div style="padding:8px 16px;border-radius:999px;background:${INK};color:var(--cream);font-size:14px;font-weight:800;letter-spacing:.12em">¡PARTIDA TERMINADA!</div>
+          <div class="heading" style="font-size:clamp(40px,12vw,84px);line-height:.95;letter-spacing:-.03em;animation:pop .7s cubic-bezier(.3,1.6,.5,1) both">${esc(winnerTitle)}</div>
+          <div class="heading" style="font-size:24px">${tot[w.id]} puntos</div>
+        </div>
+        <div style="display:flex;align-items:flex-end;justify-content:center;gap:10px">${podium}</div>
+        <div style="display:flex;flex-wrap:wrap;gap:20px;align-items:flex-start;margin-top:-28px">
+          <div style="flex:1 1 320px;min-width:0;background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:8px 18px">${finalRows}</div>
+          <div style="flex:1 1 420px;min-width:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px">${statsHtml}</div>
+        </div>
+        <div class="sticky-bottom">
+          <div style="max-width:520px;margin:0 auto;display:flex;flex-direction:column;gap:12px">${bottom}</div>
+        </div>
       </div>
     </div>`;
   }
