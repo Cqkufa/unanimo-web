@@ -1232,7 +1232,6 @@ class Game {
         <div style="width:22px;height:22px;flex:0 0 auto">${avatarSVG(p.avatar,22)}</div>
         <div style="font-size:13px;font-weight:700;color:var(--muted)">${esc(p.name)}:</div>
         <div style="flex:1;min-width:0;font-size:14px;font-weight:800;overflow-wrap:anywhere">${esc(g.text)}</div>
-        ${g.correct?`<div style="flex:0 0 auto">${this.iconCheckSmall()}</div>`:''}
       </div>`;
     }).join('') || `<div style="text-align:center;color:var(--muted);font-size:13px;font-weight:700;padding:10px 0">Nadie escribió todavía…</div>`;
     return `<div data-el="dGuessFeed" style="display:flex;flex-direction:column;gap:2px;max-height:220px;overflow-y:auto">${rows}</div>`;
@@ -1320,7 +1319,8 @@ class Game {
         const n = this.groups(this.state.g.round).length;
         if(this.local.reveal >= n){ clearInterval(this.revealTick); return; }
         this.local.reveal++;
-        this.renderScreen();
+        this.appendRevealCard();
+        this.patchRevealBottom();
       }, 750);
     }, 500);
   }
@@ -1554,7 +1554,16 @@ class Game {
       dSetSize: (t)=>{ this.local.dSize = Number(t.dataset.size); this.dPatchToolbar(); },
       dSetTool: (t)=>{ this.local.dTool = t.dataset.tool; this.dPatchToolbar(); },
       submitNow: ()=>this.submit(false),
-      revealAll: ()=>{ clearInterval(this.revealTick); this.local.reveal = this.groups(this.state.g.round).length; this.renderScreen(); },
+      revealAll: ()=>{
+        clearInterval(this.revealTick);
+        const gs = this.groups(this.state.g.round);
+        const grid = this.root.querySelector('[data-el="revealGrid"]');
+        if(!grid){ this.local.reveal = gs.length; this.renderScreen(); return; }
+        const byId = {}; this.players().forEach(p=>byId[p.id]=p);
+        for(let i=this.local.reveal;i<gs.length;i++) grid.insertAdjacentHTML('beforeend', this.revealCardHtml(gs[i], byId));
+        this.local.reveal = gs.length;
+        this.patchRevealBottom();
+      },
       goScore: ()=>{ this.local.screen='score'; this.local.selPid=this.myId; this.renderScreen(); },
       goRanking: ()=>{
         // Host-authoritative broadcast (like every other round transition) so
@@ -1567,7 +1576,7 @@ class Game {
         this.state.stage = (this.state.stage||0) + 1;
         this.broadcastState();
       },
-      selectPlayer: (t)=>{ this.local.selPid = t.dataset.pid; this.renderScreen(); },
+      selectPlayer: (t)=>{ this.local.selPid = t.dataset.pid; this.patchScoreSelection(); },
       nextRound: ()=>{
         if(this.state.gameId==='unanimo') this.uNext();
         else if(this.state.gameId==='dibujalo') this.dNext();
@@ -2070,7 +2079,7 @@ class Game {
       const bg = p.id===this.myId ? '#FFEDE6' : (idx===0 && ph ? '#FFF3CC' : '#fff');
       const deltaText = d>0?'▲ Subió '+d : d<0?'▼ Bajó '+(-d) : 'Sin cambios';
       const deltaColor = d>0?'#0E8A66':d<0?'#B3341A':INK;
-      return `<div style="position:absolute;left:0;right:0;top:${idx*104}px;min-height:88px;display:flex;align-items:center;gap:12px;padding:10px 16px 10px 10px;border-radius:22px;background:${bg};border:2px solid ${INK};box-shadow:0 4px 0 ${INK};transition:top .9s cubic-bezier(.34,1.45,.64,1)">
+      return `<div style="position:absolute;left:0;right:0;top:${idx*104}px;min-height:88px;display:flex;align-items:center;gap:12px;padding:10px 16px 10px 10px;border-radius:22px;background:${bg};border:2px solid ${INK};box-shadow:0 4px 0 ${INK};transition:top .9s cubic-bezier(.34,1.45,.64,1);animation:rise .4s cubic-bezier(.3,1.5,.5,1) both;animation-delay:${(idx*0.06).toFixed(2)}s">
         <div style="flex:0 0 auto;width:44px;text-align:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:32px">${idx+1}</div>
         <div style="width:46px;height:46px;flex:0 0 auto">${avatarSVG(p.avatar,46)}</div>
         <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
@@ -2157,7 +2166,7 @@ class Game {
     </div>`).join('');
     const confettiHtml = this.confetti.map(c=>`<div style="position:absolute;top:-20px;left:${c.left};width:${c.w};height:${c.h};border-radius:3px;background:${c.color};border:1.5px solid ${INK};animation:fall ${c.dur} linear ${c.delay} infinite"></div>`).join('');
     const bottom = this.isHost
-      ? `<button class="btn-primary" style="flex:1;min-width:0;height:auto;min-height:62px;padding:8px 6px;font-size:clamp(13px,4vw,20px)" data-action="playAgain">JUGAR DE NUEVO</button><button class="btn-secondary" style="flex:1;min-width:0;height:auto;min-height:54px;padding:8px 6px;font-size:clamp(11px,3.4vw,16px)" data-action="backToPortal">ELEGIR OTRO JUEGO</button>`
+      ? `<button class="btn-primary" style="flex:1;min-width:0;height:auto;min-height:62px;padding:8px 4px;font-size:clamp(12px,2.2vw,16px);white-space:nowrap" data-action="playAgain">JUGAR DE NUEVO</button><button class="btn-secondary" style="flex:1;min-width:0;height:auto;min-height:54px;padding:8px 4px;font-size:clamp(10px,1.9vw,14px);white-space:nowrap" data-action="backToPortal">ELEGIR OTRO JUEGO</button>`
       : `<div style="height:54px;border-radius:16px;border:2px solid ${INK};background:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;color:var(--muted)">Esperando a ${esc(this.playerById(s.hostId)?.name||'el anfitrión')}…</div>`;
     return `<div style="position:relative;min-height:100vh;overflow:hidden">
       <div style="position:fixed;inset:0;pointer-events:none;z-index:1;overflow:hidden">${confettiHtml}</div>
@@ -2168,9 +2177,11 @@ class Game {
           <div class="heading" style="font-size:24px">${tot[w.id]} puntos</div>
         </div>
         <div style="display:flex;align-items:flex-end;justify-content:center;gap:10px">${podium}</div>
-        <div style="display:flex;flex-wrap:wrap;justify-content:center;gap:20px;align-items:flex-start;margin-top:-28px">
-          <div style="flex:1 1 320px;max-width:420px;min-width:0;background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:8px 18px">${finalRows}</div>
-          <div style="flex:1 1 260px;max-width:320px;min-width:0;display:flex;flex-direction:column;gap:12px">${statsHtml}</div>
+        <div style="display:flex;flex-wrap:wrap;gap:24px;align-items:flex-start;margin-top:-28px">
+          <div style="flex:1 1 380px;min-width:0;display:flex;justify-content:center">
+            <div style="width:100%;max-width:420px;background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:8px 18px">${finalRows}</div>
+          </div>
+          <div style="flex:0 1 280px;min-width:240px;display:flex;flex-direction:column;gap:12px">${statsHtml}</div>
         </div>
         <div class="sticky-bottom">
           <div style="max-width:560px;margin:0 auto;padding:0 14px;display:flex;flex-direction:row;align-items:center;gap:12px">${bottom}</div>
@@ -2352,7 +2363,7 @@ class Game {
       const bg = p.id===this.myId ? '#FFEDE6' : (idx===0 && ph ? '#FFF3CC' : '#fff');
       const deltaText = d>0?'▲ Subió '+d : d<0?'▼ Bajó '+(-d) : 'Sin cambios';
       const deltaColor = d>0?'#0E8A66':d<0?'#B3341A':INK;
-      return `<div style="position:absolute;left:0;right:0;top:${idx*104}px;min-height:88px;display:flex;align-items:center;gap:12px;padding:10px 16px 10px 10px;border-radius:22px;background:${bg};border:2px solid ${INK};box-shadow:0 4px 0 ${INK};transition:top .9s cubic-bezier(.34,1.45,.64,1)">
+      return `<div style="position:absolute;left:0;right:0;top:${idx*104}px;min-height:88px;display:flex;align-items:center;gap:12px;padding:10px 16px 10px 10px;border-radius:22px;background:${bg};border:2px solid ${INK};box-shadow:0 4px 0 ${INK};transition:top .9s cubic-bezier(.34,1.45,.64,1);animation:rise .4s cubic-bezier(.3,1.5,.5,1) both;animation-delay:${(idx*0.06).toFixed(2)}s">
         <div style="flex:0 0 auto;width:44px;text-align:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:32px">${idx+1}</div>
         <div style="width:46px;height:46px;flex:0 0 auto">${avatarSVG(p.avatar,46)}</div>
         <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
@@ -2435,7 +2446,7 @@ class Game {
     </div>`).join('');
     const confettiHtml = this.confetti.map(c=>`<div style="position:absolute;top:-20px;left:${c.left};width:${c.w};height:${c.h};border-radius:3px;background:${c.color};border:1.5px solid ${INK};animation:fall ${c.dur} linear ${c.delay} infinite"></div>`).join('');
     const bottom = this.isHost
-      ? `<button class="btn-primary" style="flex:1;min-width:0;height:auto;min-height:62px;padding:8px 6px;font-size:clamp(13px,4vw,20px)" data-action="playAgain">JUGAR DE NUEVO</button><button class="btn-secondary" style="flex:1;min-width:0;height:auto;min-height:54px;padding:8px 6px;font-size:clamp(11px,3.4vw,16px)" data-action="backToPortal">ELEGIR OTRO JUEGO</button>`
+      ? `<button class="btn-primary" style="flex:1;min-width:0;height:auto;min-height:62px;padding:8px 4px;font-size:clamp(12px,2.2vw,16px);white-space:nowrap" data-action="playAgain">JUGAR DE NUEVO</button><button class="btn-secondary" style="flex:1;min-width:0;height:auto;min-height:54px;padding:8px 4px;font-size:clamp(10px,1.9vw,14px);white-space:nowrap" data-action="backToPortal">ELEGIR OTRO JUEGO</button>`
       : `<div style="height:54px;border-radius:16px;border:2px solid ${INK};background:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;color:var(--muted)">Esperando a ${esc(this.playerById(s.hostId)?.name||'el anfitrión')}…</div>`;
     return `<div style="position:relative;min-height:100vh;overflow:hidden">
       <div style="position:fixed;inset:0;pointer-events:none;z-index:1;overflow:hidden">${confettiHtml}</div>
@@ -2446,9 +2457,11 @@ class Game {
           <div class="heading" style="font-size:24px">${tot[w.id]} puntos</div>
         </div>
         <div style="display:flex;align-items:flex-end;justify-content:center;gap:10px">${podium}</div>
-        <div style="display:flex;flex-wrap:wrap;justify-content:center;gap:20px;align-items:flex-start;margin-top:-28px">
-          <div style="flex:1 1 320px;max-width:420px;min-width:0;background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:8px 18px">${finalRows}</div>
-          <div style="flex:1 1 260px;max-width:320px;min-width:0;display:flex;flex-direction:column;gap:12px">${statsHtml}</div>
+        <div style="display:flex;flex-wrap:wrap;gap:24px;align-items:flex-start;margin-top:-28px">
+          <div style="flex:1 1 380px;min-width:0;display:flex;justify-content:center">
+            <div style="width:100%;max-width:420px;background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:8px 18px">${finalRows}</div>
+          </div>
+          <div style="flex:0 1 280px;min-width:240px;display:flex;flex-direction:column;gap:12px">${statsHtml}</div>
         </div>
         <div class="sticky-bottom">
           <div style="max-width:560px;margin:0 auto;padding:0 14px;display:flex;flex-direction:row;align-items:center;gap:12px">${bottom}</div>
@@ -2548,36 +2561,64 @@ class Game {
     </div>`;
   }
 
+  revealCardHtml(g, byId){
+    const mine = g.pids.includes(this.myId), n = g.pids.length;
+    const kind = n>1 ? (mine?'match':'shared') : 'solo';
+    const bg = kind==='match'?CORAL:kind==='shared'?'#fff':'transparent';
+    const border = kind==='solo' ? '2px dashed var(--dashed)' : `2px solid ${INK}`;
+    const shadow = kind==='solo' ? 'none' : `0 4px 0 ${INK}`;
+    const fg = kind==='solo' ? 'var(--muted)' : INK;
+    const countBg = kind==='solo' ? 'var(--panel-line)' : INK;
+    const countFg = kind==='solo' ? 'var(--muted)' : 'var(--cream)';
+    const tag = kind==='match' ? '¡Vos también!' : kind==='solo' ? 'Solo '+(g.pids[0]===this.myId?'vos':(byId[g.pids[0]]?.name||'?')) : '';
+    const avatars = g.pids.map(id=>`<div style="width:30px;height:30px;flex:0 0 auto">${avatarSVG(byId[id]&&byId[id].avatar,30)}</div>`).join('');
+    return `<div style="background:${bg};border:${border};box-shadow:${shadow};color:${fg};border-radius:22px;padding:16px 18px;display:flex;flex-direction:column;gap:12px;animation:popSoft .35s ease-out both">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+        <div style="min-width:0;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:30px;letter-spacing:-.01em;overflow-wrap:anywhere">${esc(g.label)}</div>
+        <div style="flex:0 0 auto;min-width:50px;height:50px;border-radius:15px;background:${countBg};color:${countFg};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:28px">${n}</div>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+        <div style="display:flex;gap:4px">${avatars}</div>
+        ${tag?`<div style="font-size:14px;font-weight:800">${esc(tag)}</div>`:''}
+      </div>
+    </div>`;
+  }
+  revealBottomHtml(){
+    const s = this.state, gs = this.groups(s.g.round);
+    const revealDone = this.local.reveal >= gs.length;
+    if(!revealDone){
+      return `<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;height:62px;padding:0 8px 0 20px;border-radius:18px;background:#fff;border:2px solid ${INK}">
+        <div style="font-weight:800;font-size:16px">Revelando ${Math.min(this.local.reveal,gs.length)} de ${gs.length}</div>
+        <button data-action="revealAll" style="height:46px;padding:0 16px;border-radius:13px;border:0;background:var(--panel-line);color:${INK};font-weight:800;font-size:15px">Mostrar todo</button>
+      </div>`;
+    }
+    const mp = this.points(s.g.round)[this.myId];
+    const m = mp ? mp.items.filter(x=>x.pts>0).length : 0;
+    const summary = 'Coincidiste en '+m+' de '+(mp?mp.items.length:0)+' palabras';
+    return `<div style="text-align:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:19px;animation:rise .4s both">${esc(summary)}</div>
+      <button class="btn-primary" data-action="goScore" style="animation:pop .4s both">VER PUNTOS</button>`;
+  }
+  // Called on every reveal tick instead of a full renderScreen() — otherwise
+  // every already-shown card would replay its entrance animation each time
+  // a new one is added, which looked like the whole grid was jolting.
+  appendRevealCard(){
+    const grid = this.root.querySelector('[data-el="revealGrid"]');
+    if(!grid){ this.renderScreen(); return; }
+    const gs = this.groups(this.state.g.round);
+    const g = gs[this.local.reveal-1];
+    if(!g) return;
+    const byId = {}; this.players().forEach(p=>byId[p.id]=p);
+    grid.insertAdjacentHTML('beforeend', this.revealCardHtml(g, byId));
+  }
+  patchRevealBottom(){
+    const el = this.root.querySelector('[data-el="revealBottom"]');
+    if(el) el.innerHTML = this.revealBottomHtml();
+  }
   viewReveal(){
     const s = this.state;
     const gs = this.groups(s.g.round);
     const byId = {}; this.players().forEach(p=>byId[p.id]=p);
-    const cards = gs.slice(0, this.local.reveal).map(g=>{
-      const mine = g.pids.includes(this.myId), n = g.pids.length;
-      const kind = n>1 ? (mine?'match':'shared') : 'solo';
-      const bg = kind==='match'?CORAL:kind==='shared'?'#fff':'transparent';
-      const border = kind==='solo' ? '2px dashed var(--dashed)' : `2px solid ${INK}`;
-      const shadow = kind==='solo' ? 'none' : `0 4px 0 ${INK}`;
-      const fg = kind==='solo' ? 'var(--muted)' : INK;
-      const countBg = kind==='solo' ? 'var(--panel-line)' : INK;
-      const countFg = kind==='solo' ? 'var(--muted)' : 'var(--cream)';
-      const tag = kind==='match' ? '¡Vos también!' : kind==='shared' ? n+' coincidencias' : 'Solo '+(g.pids[0]===this.myId?'vos':(byId[g.pids[0]]?.name||'?'));
-      const avatars = g.pids.map(id=>`<div style="width:30px;height:30px;flex:0 0 auto">${avatarSVG(byId[id]&&byId[id].avatar,30)}</div>`).join('');
-      return `<div style="background:${bg};border:${border};box-shadow:${shadow};color:${fg};border-radius:22px;padding:16px 18px;display:flex;flex-direction:column;gap:12px;animation:pop .45s cubic-bezier(.3,1.5,.5,1) both">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
-          <div style="min-width:0;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:30px;letter-spacing:-.01em;overflow-wrap:anywhere">${esc(g.label)}</div>
-          <div style="flex:0 0 auto;min-width:50px;height:50px;border-radius:15px;background:${countBg};color:${countFg};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:28px">${n}</div>
-        </div>
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
-          <div style="display:flex;gap:4px">${avatars}</div>
-          <div style="font-size:14px;font-weight:800">${esc(tag)}</div>
-        </div>
-      </div>`;
-    }).join('');
-    const revealDone = this.local.reveal >= gs.length;
-    const mp = this.points(s.g.round)[this.myId];
-    const m = mp ? mp.items.filter(x=>x.pts>0).length : 0;
-    const summary = 'Coincidiste en '+m+' de '+(mp?mp.items.length:0)+' palabras';
+    const cards = gs.slice(0, this.local.reveal).map(g=>this.revealCardHtml(g, byId)).join('');
     return `<div class="screen screen-wide">
       <div style="display:flex;flex-direction:column;align-items:center;gap:12px;text-align:center">
         <div style="font-size:14px;font-weight:800;letter-spacing:.14em">¿QUÉ RESPONDIERON?</div>
@@ -2588,34 +2629,15 @@ class Game {
           <div style="display:flex;align-items:center;gap:6px"><span style="width:14px;height:14px;border-radius:5px;border:2px dashed var(--dashed)"></span>Nadie más</div>
         </div>
       </div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px">${cards}</div>
+      <div data-el="revealGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px">${cards}</div>
       <div class="sticky-bottom">
-        <div style="max-width:520px;margin:0 auto;display:flex;flex-direction:column;gap:10px">
-          ${!revealDone ? `<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;height:62px;padding:0 8px 0 20px;border-radius:18px;background:#fff;border:2px solid ${INK}">
-            <div style="font-weight:800;font-size:16px">Revelando ${Math.min(this.local.reveal,gs.length)} de ${gs.length}</div>
-            <button data-action="revealAll" style="height:46px;padding:0 16px;border-radius:13px;border:0;background:var(--panel-line);color:${INK};font-weight:800;font-size:15px">Mostrar todo</button>
-          </div>` : `
-          <div style="text-align:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:19px;animation:rise .4s both">${esc(summary)}</div>
-          <button class="btn-primary" data-action="goScore" style="animation:pop .4s both">VER PUNTOS</button>`}
-        </div>
+        <div data-el="revealBottom" style="max-width:520px;margin:0 auto;display:flex;flex-direction:column;gap:10px">${this.revealBottomHtml()}</div>
       </div>
     </div>`;
   }
 
-  viewScore(){
-    const s = this.state, pl = this.players();
-    const pts = this.points(s.g.round);
-    const order = pl.slice().sort((a,b)=>pts[b.id].total-pts[a.id].total||a.name.localeCompare(b.name));
-    const rows = order.map((p,i)=>{
-      const sel = this.local.selPid===p.id;
-      const label = p.id===this.myId ? p.name+' (vos)' : p.name;
-      return `<button data-action="selectPlayer" data-pid="${p.id}" style="display:flex;align-items:center;gap:12px;width:100%;padding:12px 16px 12px 12px;border-radius:20px;background:${p.id===this.myId?'#FFEDE6':'#fff'};border:2px solid ${sel?INK:'var(--line)'};box-shadow:${sel?`0 4px 0 ${INK}`:'none'};text-align:left;color:${INK};animation:rise .4s both;animation-delay:${(i*0.08).toFixed(2)}s">
-        <div style="flex:0 0 auto;width:36px;height:36px;border-radius:12px;background:${RANKBG[i]||'#F1E7D8'};border:2px solid ${INK};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:18px">${i+1}</div>
-        <div style="width:42px;height:42px;flex:0 0 auto">${avatarSVG(p.avatar,42)}</div>
-        <div style="flex:1;min-width:0;font-weight:800;font-size:18px">${esc(label)}</div>
-        <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:22px">${pts[p.id].total} pts</div>
-      </button>`;
-    }).join('');
+  scoreDetailHtml(){
+    const s = this.state, pts = this.points(s.g.round);
     const selId = this.local.selPid || this.myId;
     const sel = this.playerById(selId) || this.playerById(this.myId);
     const breakTitle = sel.id===this.myId ? 'Cómo sumaste' : 'Cómo sumó '+sel.name;
@@ -2624,6 +2646,35 @@ class Game {
       <div style="flex:1;min-width:0;font-size:14px;font-weight:600;color:var(--muted)">→ ${it.pts>0?'coincidió con '+it.pts+(it.pts>1?' jugadores':' jugador'):'nadie más la puso'}</div>
       <div style="flex:0 0 auto;padding:4px 10px;border-radius:999px;background:${it.pts>0?MINT:'var(--panel-line)'};border:2px solid ${INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:15px">+${it.pts}</div>
     </div>`).join('');
+    return `<div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:6px"><div class="heading" style="font-size:20px">${esc(breakTitle)}</div><div class="heading" style="font-size:20px">+${pts[sel.id].total} pts</div></div>${breakdown}`;
+  }
+  // Patches the selection highlight + detail panel only — selectPlayer used
+  // to call renderScreen(), which rebuilt the whole ranking list and
+  // replayed every row's staggered entrance animation on every tap.
+  patchScoreSelection(){
+    const selId = this.local.selPid || this.myId;
+    this.root.querySelectorAll('[data-role="score-row"]').forEach(btn=>{
+      const on = btn.dataset.pid === selId;
+      btn.style.border = `2px solid ${on?INK:'var(--line)'}`;
+      btn.style.boxShadow = on ? `0 4px 0 ${INK}` : 'none';
+    });
+    const detailEl = this.root.querySelector('[data-el="scoreDetail"]');
+    if(detailEl) detailEl.innerHTML = this.scoreDetailHtml();
+  }
+  viewScore(){
+    const s = this.state, pl = this.players();
+    const pts = this.points(s.g.round);
+    const order = pl.slice().sort((a,b)=>pts[b.id].total-pts[a.id].total||a.name.localeCompare(b.name));
+    const rows = order.map((p,i)=>{
+      const sel = this.local.selPid===p.id;
+      const label = p.id===this.myId ? p.name+' (vos)' : p.name;
+      return `<button data-role="score-row" data-action="selectPlayer" data-pid="${p.id}" style="display:flex;align-items:center;gap:12px;width:100%;padding:12px 16px 12px 12px;border-radius:20px;background:${p.id===this.myId?'#FFEDE6':'#fff'};border:2px solid ${sel?INK:'var(--line)'};box-shadow:${sel?`0 4px 0 ${INK}`:'none'};text-align:left;color:${INK};animation:rise .4s both;animation-delay:${(i*0.08).toFixed(2)}s">
+        <div style="flex:0 0 auto;width:36px;height:36px;border-radius:12px;background:${RANKBG[i]||'#F1E7D8'};border:2px solid ${INK};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:18px">${i+1}</div>
+        <div style="width:42px;height:42px;flex:0 0 auto">${avatarSVG(p.avatar,42)}</div>
+        <div style="flex:1;min-width:0;font-weight:800;font-size:18px">${esc(label)}</div>
+        <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:22px">${pts[p.id].total} pts</div>
+      </button>`;
+    }).join('');
     return `<div class="screen screen-wide">
       <div style="display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center">
         <div style="font-size:14px;font-weight:800;letter-spacing:.14em">RESULTADOS · RONDA ${s.g.round+1}</div>
@@ -2635,10 +2686,7 @@ class Game {
           <div style="display:flex;justify-content:space-between;align-items:baseline;padding:0 4px"><div class="heading" style="font-size:20px">Esta ronda</div><div style="font-size:13px;font-weight:700;color:var(--muted)">Tocá un jugador para ver su detalle</div></div>
           ${rows}
         </div>
-        <div style="flex:1 1 340px;min-width:0;background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:16px 18px;display:flex;flex-direction:column;gap:4px">
-          <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:6px"><div class="heading" style="font-size:20px">${esc(breakTitle)}</div><div class="heading" style="font-size:20px">+${pts[sel.id].total} pts</div></div>
-          ${breakdown}
-        </div>
+        <div data-el="scoreDetail" style="flex:1 1 340px;min-width:0;background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:16px 18px;display:flex;flex-direction:column;gap:4px">${this.scoreDetailHtml()}</div>
       </div>
       <div class="sticky-bottom">
         <div style="max-width:520px;margin:0 auto"><button class="btn-primary" data-action="goRanking">VER CLASIFICACIÓN</button></div>
@@ -2658,7 +2706,7 @@ class Game {
       const bg = p.id===this.myId ? '#FFEDE6' : (idx===0 && ph ? '#FFF3CC' : '#fff');
       const deltaText = d>0?'▲ Subió '+d : d<0?'▼ Bajó '+(-d) : 'Sin cambios';
       const deltaColor = d>0?'#0E8A66':d<0?'#B3341A':INK;
-      return `<div style="position:absolute;left:0;right:0;top:${idx*104}px;min-height:88px;display:flex;align-items:center;gap:12px;padding:10px 16px 10px 10px;border-radius:22px;background:${bg};border:2px solid ${INK};box-shadow:0 4px 0 ${INK};transition:top .9s cubic-bezier(.34,1.45,.64,1)">
+      return `<div style="position:absolute;left:0;right:0;top:${idx*104}px;min-height:88px;display:flex;align-items:center;gap:12px;padding:10px 16px 10px 10px;border-radius:22px;background:${bg};border:2px solid ${INK};box-shadow:0 4px 0 ${INK};transition:top .9s cubic-bezier(.34,1.45,.64,1);animation:rise .4s cubic-bezier(.3,1.5,.5,1) both;animation-delay:${(idx*0.06).toFixed(2)}s">
         <div style="flex:0 0 auto;width:44px;text-align:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:32px">${idx+1}</div>
         <div style="width:46px;height:46px;flex:0 0 auto">${avatarSVG(p.avatar,46)}</div>
         <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
@@ -2740,7 +2788,7 @@ class Game {
     </div>`).join('');
     const confettiHtml = this.confetti.map(c=>`<div style="position:absolute;top:-20px;left:${c.left};width:${c.w};height:${c.h};border-radius:3px;background:${c.color};border:1.5px solid ${INK};animation:fall ${c.dur} linear ${c.delay} infinite"></div>`).join('');
     const bottom = this.isHost
-      ? `<button class="btn-primary" style="flex:1;min-width:0;height:auto;min-height:62px;padding:8px 6px;font-size:clamp(13px,4vw,20px)" data-action="playAgain">JUGAR DE NUEVO</button><button class="btn-secondary" style="flex:1;min-width:0;height:auto;min-height:54px;padding:8px 6px;font-size:clamp(11px,3.4vw,16px)" data-action="backToPortal">ELEGIR OTRO JUEGO</button>`
+      ? `<button class="btn-primary" style="flex:1;min-width:0;height:auto;min-height:62px;padding:8px 4px;font-size:clamp(12px,2.2vw,16px);white-space:nowrap" data-action="playAgain">JUGAR DE NUEVO</button><button class="btn-secondary" style="flex:1;min-width:0;height:auto;min-height:54px;padding:8px 4px;font-size:clamp(10px,1.9vw,14px);white-space:nowrap" data-action="backToPortal">ELEGIR OTRO JUEGO</button>`
       : `<div style="height:54px;border-radius:16px;border:2px solid ${INK};background:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;color:var(--muted)">Esperando a ${esc(this.playerById(this.state.hostId)?.name||'el anfitrión')}…</div>`;
     return `<div style="position:relative;min-height:100vh;overflow:hidden">
       <div style="position:fixed;inset:0;pointer-events:none;z-index:1;overflow:hidden">${confettiHtml}</div>
@@ -2751,9 +2799,11 @@ class Game {
           <div class="heading" style="font-size:24px">${tot[w.id]} puntos</div>
         </div>
         <div style="display:flex;align-items:flex-end;justify-content:center;gap:10px">${podium}</div>
-        <div style="display:flex;flex-wrap:wrap;justify-content:center;gap:20px;align-items:flex-start;margin-top:-28px">
-          <div style="flex:1 1 320px;max-width:420px;min-width:0;background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:8px 18px">${finalRows}</div>
-          <div style="flex:1 1 260px;max-width:320px;min-width:0;display:flex;flex-direction:column;gap:12px">${statsHtml}</div>
+        <div style="display:flex;flex-wrap:wrap;gap:24px;align-items:flex-start;margin-top:-28px">
+          <div style="flex:1 1 380px;min-width:0;display:flex;justify-content:center">
+            <div style="width:100%;max-width:420px;background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:8px 18px">${finalRows}</div>
+          </div>
+          <div style="flex:0 1 280px;min-width:240px;display:flex;flex-direction:column;gap:12px">${statsHtml}</div>
         </div>
         <div class="sticky-bottom">
           <div style="max-width:560px;margin:0 auto;padding:0 14px;display:flex;flex-direction:row;align-items:center;gap:12px">${bottom}</div>

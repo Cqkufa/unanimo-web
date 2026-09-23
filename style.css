@@ -37,6 +37,7 @@ a:hover{color:var(--coral)}
 .heading{font-family:'Bricolage Grotesque',sans-serif;font-weight:800}
 
 @keyframes pop{0%{transform:scale(.6);opacity:0}60%{transform:scale(1.05);opacity:1}100%{transform:scale(1);opacity:1}}
+@keyframes popSoft{from{transform:scale(.95);opacity:0}to{transform:scale(1);opacity:1}}
 @keyframes rise{from{transform:translateY(16px);opacity:0}to{transform:none;opacity:1}}
 @keyframes drop{0%{transform:translateY(-60px);opacity:0}70%{transform:translateY(4px);opacity:1}100%{transform:none;opacity:1}}
 @keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
@@ -82,7 +83,7 @@ a:hover{color:var(--coral)}
   display:flex;flex-direction:column;gap:10px;z-index:5;
 }
 
-.screen{max-width:720px;margin:0 auto;min-height:100vh;padding:16px 20px 0;display:flex;flex-direction:column;gap:18px}
+.screen{max-width:720px;margin:0 auto;min-height:100vh;padding:28px 20px 24px;display:flex;flex-direction:column;gap:18px}
 .screen-wide{max-width:1080px}
 .screen-narrow{max-width:620px}
 
@@ -122,5 +123,5 @@ a:hover{color:var(--coral)}
 .field-input:focus{box-shadow:0 0 0 4px rgba(255,107,74,.28)}
 
 @media (max-width:480px){
-  .screen{padding:14px 14px 0}
+  .screen{padding:22px 14px 20px}
 }
