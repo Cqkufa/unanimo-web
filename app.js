@@ -209,6 +209,12 @@ class Game {
     };
     const tick = ()=>{
       if(!this._musicPlaying) return;
+      // Browsers keep the AudioContext suspended until a real user gesture.
+      // Scheduling notes against a frozen currentTime here would leave them
+      // stuck at t=0 and burst out garbled the moment it finally resumes —
+      // so just keep polling (silently) until it's actually running, then
+      // pick up the beat exactly where it left off.
+      if(ctx.state !== 'running'){ ctx.resume().catch(()=>{}); this._musicTimer = setTimeout(tick, beat*1000); return; }
       const c = chords[Math.floor(step/4) % chords.length];
       const beatInChord = step % 4;
       const t0 = ctx.currentTime;
@@ -1557,7 +1563,7 @@ class Game {
     const colors = [CORAL,VIOLET,YEL,MINT,BLUE];
     const rots = [-6,4,-4,5,-3];
     const gameCards = GAMES.map((g,i)=>this.gameCardHtml(g, 'pickGameFromHome', (0.15+i*0.08).toFixed(2)+'s')).join('');
-    return `<div class="screen" style="position:relative;overflow:hidden">
+    return `<div class="screen screen-wide" style="position:relative;overflow:hidden">
       <div style="position:absolute;inset:0;pointer-events:none;z-index:0">
         <div style="position:absolute;top:2%;left:2%;animation:float 5s ease-in-out infinite"><div style="padding:9px 16px;border-radius:18px 18px 18px 4px;background:${CORAL};border:2px solid ${INK};font-weight:800;font-size:16px;transform:rotate(-8deg)">Che</div></div>
         <div style="position:absolute;top:4%;right:2%;animation:float 6s ease-in-out .8s infinite"><div style="padding:9px 16px;border-radius:18px 18px 4px 18px;background:#fff;border:2px solid ${INK};font-weight:800;font-size:16px;transform:rotate(6deg)">Dale</div></div>
@@ -1570,9 +1576,9 @@ class Game {
       </div>
       <div style="position:relative;z-index:1;display:flex;flex-direction:column;gap:12px;padding-top:22px">
         <div style="font-size:13px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);padding:0 4px">Elegí un juego para arrancar</div>
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px">${gameCards}</div>
+        <div style="display:flex;flex-wrap:wrap;justify-content:center;gap:14px">${gameCards}</div>
       </div>
-      <div style="position:relative;z-index:1;width:100%;display:flex;flex-direction:column;gap:14px;padding-top:22px;padding-bottom:24px">
+      <div style="position:relative;z-index:1;width:100%;max-width:460px;margin:0 auto;display:flex;flex-direction:column;gap:14px;padding-top:22px;padding-bottom:24px">
         <div style="display:flex;flex-direction:column;gap:8px;padding:14px;border-radius:20px;background:#fff;border:2px solid var(--line)">
           <div style="font-size:14px;font-weight:700;color:var(--muted);padding-left:4px">¿Te pasaron un código?</div>
           <div style="display:flex;gap:10px">
@@ -1682,7 +1688,7 @@ class Game {
   // picker, so "pick a game" always looks the same everywhere in the app.
   gameCardHtml(g, actionName, delay){
     const est = gameEstimateMinutes(g.id);
-    return `<button data-action="${actionName}" data-game="${g.id}" style="position:relative;display:flex;flex-direction:column;gap:12px;padding:20px;border-radius:24px;background:#fff;border:2.5px solid ${INK};box-shadow:0 5px 0 ${INK};text-align:left;transition:transform .08s,box-shadow .08s;animation:rise .5s both;animation-delay:${delay||'0s'}" style-active="transform:translateY(4px);box-shadow:0 1px 0 ${INK}">
+    return `<button data-action="${actionName}" data-game="${g.id}" style="position:relative;display:flex;flex-direction:column;gap:12px;padding:20px;border-radius:24px;background:#fff;border:2.5px solid ${INK};box-shadow:0 5px 0 ${INK};text-align:left;transition:transform .08s,box-shadow .08s;animation:rise .5s both;animation-delay:${delay||'0s'};flex:0 1 240px;max-width:250px" style-active="transform:translateY(4px);box-shadow:0 1px 0 ${INK}">
       ${g.isNew?`<div style="position:absolute;top:16px;right:16px;padding:5px 12px;border-radius:999px;background:${MINT};border:2px solid ${INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:11px;letter-spacing:.06em">NUEVO</div>`:''}
       <div style="display:flex;gap:6px">
         <div style="width:48px;height:58px;border-radius:14px;background:${g.colors[0]};border:2.5px solid ${INK};box-shadow:0 3px 0 ${INK};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:26px;transform:rotate(-4deg)">${g.letters[0]}</div>
@@ -1702,7 +1708,7 @@ class Game {
     const cards = GAMES.map((g,i)=>this.gameCardHtml(g, 'pickGame', (i*0.06)+'s')).join('');
     return `<div style="display:flex;flex-direction:column;gap:10px">
       <div style="font-size:13px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);padding:0 4px">¿A qué jugamos?</div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px">${cards}</div>
+      <div style="display:flex;flex-wrap:wrap;justify-content:center;gap:14px">${cards}</div>
     </div>`;
   }
   viewComingSoonConfig(gameId){
