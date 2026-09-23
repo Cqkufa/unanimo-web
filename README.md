@@ -4,11 +4,12 @@
 
 Un portal de minijuegos multijugador para jugar en grupo, cada uno desde su propio celular. Desde la home elegís a qué jugar, armás tu sala (nombre + avatar) y compartís el código de 5 letras — el resto se une con ese código, y desde ahí el anfitrión puede cambiar de juego cuando quiera sin que nadie tenga que volver a escribir nada.
 
-**Tres juegos:**
+**Cuatro juegos:**
 
 - **Unánimo** — todos reciben la misma palabra, escriben lo que creen que el resto también va a poner, y suman puntos por cada coincidencia. No gana lo más original: gana pensar igual que el resto.
 - **Dibujalo** — en cada ronda alguien dibuja (elige entre 3 palabras, en privado) y el resto adivina en tiempo real mientras el trazo aparece en su pantalla. Puntos por velocidad; el dibujante también suma según cuántos entendieron su dibujo.
-- **Tutti Frutti** — misma letra para todos, una palabra por categoría. Cualquiera puede gritar STOP y termina la ronda para todos. 10 puntos si tu respuesta es válida y única, 5 si alguien más puso lo mismo, 0 si está vacía o inválida (se puede impugnar 🚩).
+- **Tutti Frutti** — misma letra para todos, una palabra por categoría. Cualquiera puede gritar STOP y termina la ronda para todos. 10 puntos si tu respuesta es válida y única, 5 si alguien más puso lo mismo, 0 si está vacía o inválida (se puede impugnar).
+- **Impostor** — todos reciben la misma palabra secreta, menos el infiltrado (una palabra relacionada distinta, o ninguna en modo "puro"). Por turnos cada uno da una pista, después se discute y se vota en secreto a quién creen que es. Si lo atrapan, tiene una última chance: adivinar la palabra del grupo para sobrevivir igual.
 
 Cada jugador arma su propio personaje al entrar a la sala (una sola vez, no por juego): elige nombre y, con flechitas, el color de piel, ojos, boca y un accesorio opcional — todo dibujado en pixel art vía SVG, sin imágenes externas. Hay efectos de sonido (clics, alguien se une — silenciables con el ícono de parlante) y un chat flotante para hablar con el resto durante toda la sesión.
 
@@ -43,6 +44,8 @@ y abrí `http://localhost:4173`.
 
 La palabra secreta de Dibujalo nunca se guarda en el estado compartido: el host la retiene solo en memoria y se la manda al dibujante mediante un mensaje dirigido (`to: <id>`) en el mismo canal — cualquier otro cliente lo recibe pero lo descarta sin abrirlo. Los trazos del lápiz viajan como eventos livianos aparte (no como parte del estado de la partida), para que dibujar se sienta instantáneo sin sobrecargar la sincronización.
 
+En Impostor, quién es el infiltrado y ambas palabras siguen el mismo patrón: viven solo en memoria del host hasta la revelación, y cada jugador recibe únicamente su propio rol/palabra por mensaje dirigido. Los votos también se acumulan en el host sin difundirse — mientras dura la votación, el resto solo ve un contador de "cuántos ya votaron", nunca a quién.
+
 ## Limitaciones conocidas
 
 - Si el anfitrión cierra la pestaña, la partida queda sin quien la conduzca (no hay traspaso de host).
@@ -56,8 +59,8 @@ La palabra secreta de Dibujalo nunca se guarda en el estado compartido: el host 
 ```
 index.html        Punto de entrada
 style.css         Sistema visual (colores, tipografía, componentes)
-app.js            Portal + los tres juegos (rooms, lobby, red, avatares, chat, sonido)
+app.js            Portal + los cuatro juegos (rooms, lobby, red, avatares, chat, sonido)
 words.js          Banco de palabras de Unánimo
-wordbank.js        Banco de palabras/categorías de Dibujalo y Tutti Frutti
+wordbank.js        Banco de palabras/categorías de Dibujalo, Tutti Frutti e Impostor
 supabaseClient.js Cliente de Supabase (Realtime Broadcast)
 ```

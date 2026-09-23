@@ -1,6 +1,6 @@
 import { supabase } from './supabaseClient.js';
 import { pickWords } from './words.js';
-import { DIBUJALO_BANK, pickDibujaloTrio, dibujaloFunnyLine, TUTTI_CATEGORIES, pickLetter } from './wordbank.js';
+import { DIBUJALO_BANK, pickDibujaloTrio, dibujaloFunnyLine, TUTTI_CATEGORIES, pickLetter, pickImpostorPair } from './wordbank.js';
 
 /* ---------- utils ---------- */
 const INK='#1D1B2F', CORAL='#FF6B4A', MINT='#2ED3A6', YEL='#FFC83D', VIOLET='#9B85FF', BLUE='#5CB8FF', PINK='#FF8CC2';
@@ -130,6 +130,7 @@ const GAMES = [
   {id:'unanimo', name:'Unánimo', tagline:'Pensá como los demás. Sumás por cada palabra que coincide.', letters:['U','N'], colors:[CORAL,VIOLET], min:2, max:8, isNew:false},
   {id:'dibujalo', name:'Dibujalo', tagline:'Uno dibuja, el resto adivina en tiempo real contrarreloj.', letters:['D','I'], colors:[BLUE,YEL], min:3, max:10, isNew:true},
   {id:'tuttifrutti', name:'Tutti Frutti', tagline:'Una letra, varias categorías y un solo grito: ¡STOP!', letters:['T','F'], colors:[MINT,PINK], min:2, max:8, isNew:true},
+  {id:'impostor', name:'Impostor', tagline:'Todos comparten una palabra. Uno miente. Descubrilo antes de que sea tarde.', letters:['I','M'], colors:[VIOLET,PINK], min:4, max:12, isNew:true},
 ];
 function gameMeta(id){ return GAMES.find(g=>g.id===id); }
 // Same formulas each config screen uses for its own live estimate, applied
@@ -139,6 +140,7 @@ function gameEstimateMinutes(gameId){
   if(gameId==='unanimo') return Math.max(1,Math.round(3*(45+35)/60));
   if(gameId==='dibujalo') return Math.max(1,Math.round(6*(60+10+15)/60));
   if(gameId==='tuttifrutti') return Math.max(1,Math.round(5*(60+40)/60));
+  if(gameId==='impostor') return Math.max(1,Math.round(5*(6*30+60+20+30)/60));
   return 5;
 }
 
@@ -178,10 +180,13 @@ class Game {
       chatOpen:false, chatUnread:0, chatDraft:'',
       hostFlow: null, // host-only, LOCAL/unsynced: which game's config screen (if any) the host is looking at from the lobby
       dColor: INK, dSize: 6, dTool: 'brush', dGuessDraft: '', dOptions: null,
+      impClueDraft: '', impGuessDraft: '', impMyWord: null, impIsImpostor: false, impAllyName: null,
+      impReadyConfirmed: false, impVoted: false, impVotedFor: null, impRevealPhase: 0,
     };
     this.uDraft = { rounds:3, words:6, time:45 };
     this.dDraft = { rounds:6, chooseTime:10, drawTime:60, hints:true, categories:Object.keys(DIBUJALO_BANK) };
     this.tfDraft = { rounds:5, time:60, categories:['nombre','animal','pais','comida','objeto','pelicula'], hard:false };
+    this.impDraft = { rounds:5, impostorCount:'auto', clueTime:30, discussTime:60, voteTime:20, mode:'classic' };
     this.state = null; // host-authoritative shared state, once in a room
     this.toasts = [];
     this.chatMessages = [];
@@ -349,6 +354,10 @@ class Game {
     this.channel.on('broadcast', {event:'dAutoChosen'}, ({payload})=>{ if(payload.to===this.myId) this.local.dChosenWord = payload.word; });
     this.channel.on('broadcast', {event:'stroke'}, ({payload})=> this.dOnStroke(payload));
     this.channel.on('broadcast', {event:'dClear'}, ()=> this.dOnClear());
+    // Impostor: each player's word/role is delivered as a targeted message
+    // (like Dibujalo's word options) so it never sits in the shared,
+    // broadcast-to-everyone game state.
+    this.channel.on('broadcast', {event:'impWord'}, ({payload})=>{ if(payload.to===this.myId) this.impReceiveWord(payload); });
     await new Promise(resolve=>{
       this.channel.subscribe(status=>{ if(status==='SUBSCRIBED') resolve(); });
     });
@@ -524,6 +533,22 @@ class Game {
       if(this.state.gameId!=='dibujalo' || !this.state.g || msg.round!==this.state.g.round) return;
       this.dHostGuess(msg.id, msg.text, msg.ms, msg.round);
     }
+    else if(msg.type === 'impReady'){
+      if(this.state.gameId!=='impostor' || !this.state.g || msg.round!==this.state.g.round) return;
+      this.impSetReady(msg.id);
+    }
+    else if(msg.type === 'impClue'){
+      if(this.state.gameId!=='impostor' || !this.state.g || msg.round!==this.state.g.round) return;
+      this.impSubmitClue(msg.id, msg.text, false);
+    }
+    else if(msg.type === 'impVote'){
+      if(this.state.gameId!=='impostor' || !this.state.g || msg.round!==this.state.g.round) return;
+      this.impCastVote(msg.id, msg.targetId);
+    }
+    else if(msg.type === 'impGuess'){
+      if(this.state.gameId!=='impostor' || !this.state.g) return;
+      this.impSubmitGuess(msg.id, msg.text);
+    }
   }
 
   checkAllDone(){
@@ -598,9 +623,32 @@ class Game {
       if(s.phase === 'dReveal'){
         this.dCaptureFinalImage(); // canvas element from 'dDraw' is still mounted right up until renderScreen() below
       }
-      if(s.phase === 'ranking' || s.phase === 'dRanking' || s.phase === 'tfRanking'){
+      if(s.phase === 'ranking' || s.phase === 'dRanking' || s.phase === 'tfRanking' || s.phase === 'impRanking'){
         this.local.rankPhase = 0;
         this.later(()=>{ this.local.rankPhase = 1; this.renderScreen(); }, 900);
+      }
+      if(s.phase === 'impWord'){
+        this.local.impMyWord = null; this.local.impIsImpostor = false; this.local.impAllyName = null;
+        this.local.impReadyConfirmed = false; this.local.impIntro = true;
+        this.later(()=>{ this.local.impIntro=false; this.renderScreen(); }, 2600);
+      }
+      if(s.phase === 'impClue'){
+        this.local.impClueDraft = '';
+        this.impStartLocalTimer('clue');
+      }
+      if(s.phase === 'impDiscuss'){
+        this.impStartLocalTimer('discuss');
+      }
+      if(s.phase === 'impVote'){
+        this.local.impVoted = false; this.local.impVotedFor = null;
+        this.impStartLocalTimer('vote');
+      }
+      if(s.phase === 'impReveal'){
+        this.local.impRevealPhase = 0;
+        this.later(()=>{ this.local.impRevealPhase = 1; this.renderScreen(); }, 1600);
+      }
+      if(s.phase === 'impGuess'){
+        this.local.impGuessDraft = '';
       }
       this.renderScreen();
       return;
@@ -619,6 +667,12 @@ class Game {
     // everyone else's flags/points never refresh on screen until some other
     // action happens to force a re-render.
     else if(this.local.screen === 'tfReview') this.renderScreen();
+    // impWord: someone else's ready-check ticks in; impVote: the public
+    // "X/Y votaron" counter ticks up; impGuess: the caught impostor's
+    // result appears for everyone once the host resolves it.
+    else if(this.local.screen === 'impWord') this.renderScreen();
+    else if(this.local.screen === 'impVote') this.renderScreen();
+    else if(this.local.screen === 'impGuess') this.renderScreen();
   }
 
   /* ---------- round flow (host drives global stage) ---------- */
@@ -1434,6 +1488,8 @@ class Game {
         this.tfQueueDraft();
       }
       else if(t.dataset.role === 'd-guess-input'){ this.local.dGuessDraft = t.value.slice(0,40); }
+      else if(t.dataset.role === 'imp-clue-input'){ this.local.impClueDraft = t.value.slice(0,40); }
+      else if(t.dataset.role === 'imp-guess-input'){ this.local.impGuessDraft = t.value.slice(0,40); }
     });
     document.body.addEventListener('keydown', e=>{
       const t = e.target;
@@ -1455,6 +1511,8 @@ class Game {
         else this.tfPressStop();
       }
       if(t.dataset.role === 'd-guess-input' && e.key==='Enter'){ e.preventDefault(); this.dSendGuess(); }
+      if(t.dataset.role === 'imp-clue-input' && e.key==='Enter'){ e.preventDefault(); this.impSendClue(); }
+      if(t.dataset.role === 'imp-guess-input' && e.key==='Enter'){ e.preventDefault(); this.impSendGuess(); }
     });
   }
   patchWordMeta(){
@@ -1508,6 +1566,7 @@ class Game {
         if(this.state.gameId==='unanimo') this.uStartGame();
         else if(this.state.gameId==='dibujalo') this.dStartGame();
         else if(this.state.gameId==='tuttifrutti') this.tfStartGame();
+        else if(this.state.gameId==='impostor') this.impStartGame();
       },
       copyCode: ()=>{ try{ navigator.clipboard.writeText(this.state.code); }catch(e){} this.toast('Código copiado', MINT); },
       addBot: ()=>this.addBot(),
@@ -1519,6 +1578,20 @@ class Game {
       confirmUnanimoConfig: ()=>this.confirmUnanimoConfig(),
       confirmDibujaloConfig: ()=>this.confirmDibujaloConfig(),
       confirmTfConfig: ()=>this.confirmTfConfig(),
+      confirmImpostorConfig: ()=>this.confirmImpostorConfig(),
+      impSetRounds: (t)=>{ this.impDraft.rounds = Number(t.dataset.val); this.renderScreen(); },
+      impSetCount: (t)=>{ this.impDraft.impostorCount = t.dataset.val==='auto' ? 'auto' : Number(t.dataset.val); this.renderScreen(); },
+      impSetClueTime: (t)=>{ this.impDraft.clueTime = Number(t.dataset.val); this.renderScreen(); },
+      impSetDiscussTime: (t)=>{ this.impDraft.discussTime = Number(t.dataset.val); this.renderScreen(); },
+      impSetVoteTime: (t)=>{ this.impDraft.voteTime = Number(t.dataset.val); this.renderScreen(); },
+      impSetMode: (t)=>{ this.impDraft.mode = t.dataset.val; this.renderScreen(); },
+      impConfirmReady: ()=>this.impConfirmReady(),
+      impSendClue: ()=>this.impSendClue(),
+      impStartVoteNow: ()=>{ if(this.isHost) this.impStartVote(); },
+      impVote: (t)=>this.impVote(t.dataset.pid),
+      impContinueReveal: ()=>this.impContinueReveal(),
+      impSendGuess: ()=>this.impSendGuess(),
+      impStartResults: ()=>{ if(this.isHost) this.impStartResults(); },
       decWords: ()=>{ this.uDraft.words = clamp(this.uDraft.words-1,3,8); this.renderScreen(); },
       incWords: ()=>{ this.uDraft.words = clamp(this.uDraft.words+1,3,8); this.renderScreen(); },
       setRounds: (t)=>{ this.uDraft.rounds = Number(t.dataset.val); this.renderScreen(); },
@@ -1571,7 +1644,7 @@ class Game {
         // every player gets taken to the ranking screen together, instead of
         // only the host navigating locally while guests wait on reveal forever.
         if(!this.isHost || !this.state) return;
-        const map = {unanimo:'ranking', tuttifrutti:'tfRanking', dibujalo:'dRanking'};
+        const map = {unanimo:'ranking', tuttifrutti:'tfRanking', dibujalo:'dRanking', impostor:'impRanking'};
         const phase = map[this.state.gameId]; if(!phase) return;
         this.state.phase = phase;
         this.state.stage = (this.state.stage||0) + 1;
@@ -1582,11 +1655,13 @@ class Game {
         if(this.state.gameId==='unanimo') this.uNext();
         else if(this.state.gameId==='dibujalo') this.dNext();
         else if(this.state.gameId==='tuttifrutti') this.tfNext();
+        else if(this.state.gameId==='impostor') this.impNext();
       },
       playAgain: ()=>{
         if(this.state.gameId==='unanimo') this.uPlayAgain();
         else if(this.state.gameId==='dibujalo') this.dPlayAgain();
         else if(this.state.gameId==='tuttifrutti') this.tfPlayAgain();
+        else if(this.state.gameId==='impostor') this.impPlayAgain();
       },
       avatarPrev: (t)=>{ const k=t.dataset.trait, n=Number(t.dataset.count); this.local.avatar[k] = ((this.local.avatar[k]||0)-1+n)%n; this.refreshAvatarUI(); },
       avatarNext: (t)=>{ const k=t.dataset.trait, n=Number(t.dataset.count); this.local.avatar[k] = ((this.local.avatar[k]||0)+1)%n; this.refreshAvatarUI(); },
@@ -1621,6 +1696,15 @@ class Game {
     else if(sc==='dReveal') html = this.viewDReveal();
     else if(sc==='dRanking') html = this.viewDRanking();
     else if(sc==='dFinal') html = this.viewDFinal();
+    else if(sc==='impWord') html = this.viewImpWord();
+    else if(sc==='impClue') html = this.viewImpClue();
+    else if(sc==='impDiscuss') html = this.viewImpDiscuss();
+    else if(sc==='impVote') html = this.viewImpVote();
+    else if(sc==='impReveal') html = this.viewImpReveal();
+    else if(sc==='impGuess') html = this.viewImpGuess();
+    else if(sc==='impResults') html = this.viewImpResults();
+    else if(sc==='impRanking') html = this.viewImpRanking();
+    else if(sc==='impFinal') html = this.viewImpFinal();
     else html = this.viewHome();
 
     this.root.innerHTML = html;
@@ -1648,6 +1732,19 @@ class Game {
     if(sc==='dChoose'){
       const left = this.state ? Math.max(0, Math.round((this.state.g.chooseEndAt - Date.now())/1000)) : 0;
       this.dPatchTimer(left);
+    }
+    if(sc==='impClue'){
+      this.later(()=>{ const el=this.root.querySelector('[data-role="imp-clue-input"]'); if(el) el.focus({preventScroll:true}); }, 50);
+      const left = this.state ? Math.max(0, Math.round((this.state.g.clueEndAt - Date.now())/1000)) : 0;
+      this.impPatchTimer('clue', left);
+    }
+    if(sc==='impDiscuss'){
+      const left = this.state ? Math.max(0, Math.round((this.state.g.discussEndAt - Date.now())/1000)) : 0;
+      this.impPatchTimer('discuss', left);
+    }
+    if(sc==='impVote'){
+      const left = this.state ? Math.max(0, Math.round((this.state.g.voteEndAt - Date.now())/1000)) : 0;
+      this.impPatchTimer('vote', left);
     }
   }
 
@@ -1799,6 +1896,7 @@ class Game {
       if(this.local.hostFlow==='unanimo') return this.viewUnanimoConfig();
       if(this.local.hostFlow==='dibujalo') return this.viewDibujaloConfig ? this.viewDibujaloConfig() : this.viewComingSoonConfig('dibujalo');
       if(this.local.hostFlow==='tuttifrutti') return this.viewTfConfig ? this.viewTfConfig() : this.viewComingSoonConfig('tuttifrutti');
+      if(this.local.hostFlow==='impostor') return this.viewImpostorConfig ? this.viewImpostorConfig() : this.viewComingSoonConfig('impostor');
     }
     const hostId = s.hostId;
     const n = Math.max(6, pl.length);
@@ -1870,6 +1968,7 @@ class Game {
     if(gameId==='unanimo') items = [cfg.rounds+(cfg.rounds===1?' ronda':' rondas'), cfg.words+' palabras', cfg.time+' s por ronda'];
     else if(gameId==='dibujalo') items = [cfg.rounds+(cfg.rounds===1?' ronda':' rondas'), cfg.chooseTime+'s para elegir', cfg.drawTime+'s para dibujar'];
     else if(gameId==='tuttifrutti') items = [cfg.rounds+(cfg.rounds===1?' ronda':' rondas'), cfg.categories.length+' categorías', cfg.time+'s por ronda'];
+    else if(gameId==='impostor') items = [cfg.rounds+(cfg.rounds===1?' ronda':' rondas'), (cfg.impostorCount==='auto'?'Infiltrados automático':cfg.impostorCount+(cfg.impostorCount===1?' infiltrado':' infiltrados')), cfg.mode==='pure'?'Modo puro':'Modo clásico'];
     return items.map(t=>`<div style="padding:8px 14px;border-radius:999px;background:#fff;border:2px solid var(--line);font-size:14px;font-weight:700">${esc(t)}</div>`).join('');
   }
 
@@ -2877,6 +2976,840 @@ class Game {
       case 'planta': return this._icon(s, INK, 2.1, `<path d="M12 21V9"></path><path d="M12 9C12 4 8 3 4 3c0 5 2 8 8 8zM12 12c0-4 4-5 8-5 0 5-2 8-8 8"></path>`);
       default: return this.iconQuestion(s);
     }
+  }
+  iconMask(px, color){ return this._icon(px||18, color||INK, 2.1, `<path d="M2 9c3-3 6-3 9-1 3-2 6-2 9 1-1 6-4 8-7 6-1-1-3-1-4 0-3 2-6 0-7-6z"></path><circle cx="7.5" cy="9.3" r="1.3" fill="${color||INK}"></circle><circle cx="16.5" cy="9.3" r="1.3" fill="${color||INK}"></circle>`); }
+
+  /* ================= IMPOSTOR =================
+     Security model: the actual secret (who's the impostor, both words)
+     lives ONLY in this.impSecret — a host-local variable, never written
+     into this.state — exactly like Dibujalo's this.dSecretWord. Each
+     player's own word/role is delivered as a targeted broadcast (only
+     that id's client acts on it). It's only copied into the shared,
+     broadcast state.g once the round reaches 'impReveal', at which point
+     showing it to everyone is the whole point. Individual votes are
+     tallied host-side in this.impVotes (also never broadcast raw) until
+     the vote closes — only the plain "N/M votaron" count is public. */
+  confirmImpostorConfig(){
+    if(!this.isHost) return;
+    this.state.gameId = 'impostor';
+    this.state.gameConfig = { ...this.impDraft };
+    this.state.g = this.impFreshG();
+    this.state.stage = (this.state.stage||0) + 1;
+    this.local.hostFlow = null;
+    this.broadcastState();
+  }
+  impFreshG(){
+    return {
+      round:-1, usedPairs:[], order:[], turnIndex:0,
+      clueEndAt:0, discussEndAt:0, voteEndAt:0,
+      clues:[], ready:[], voteCount:[], votes:[], voteDetail:[],
+      accusedId:[], impostorIds:[], groupWord:[], impostorWord:[],
+      caughtId:[], guessResult:[], roundScores:[],
+    };
+  }
+  impStartGame(){
+    if(!this.isHost) return;
+    this.state.g = this.impFreshG();
+    this.impStartRound(0);
+  }
+  impAutoCount(n){ return n>=10 ? 2 : 1; }
+  impResolveCount(n){
+    const c = this.state.gameConfig.impostorCount;
+    if(c==='auto' || c==null) return this.impAutoCount(n);
+    return Math.min(Number(c), Math.max(1, Math.floor((n-1)/2)));
+  }
+  impStartRound(r){
+    const [groupWord, impostorWord] = pickImpostorPair(this.state.g.usedPairs);
+    this.state.g.usedPairs = [...this.state.g.usedPairs, [groupWord, impostorWord]];
+    const ids = this.players().map(p=>p.id);
+    const shuffled = ids.slice();
+    for(let i=shuffled.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [shuffled[i],shuffled[j]]=[shuffled[j],shuffled[i]]; }
+    const impostorIds = shuffled.slice(0, this.impResolveCount(ids.length));
+    const order = ids.slice();
+    for(let i=order.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [order[i],order[j]]=[order[j],order[i]]; }
+    const pureMode = this.state.gameConfig.mode==='pure';
+    this.impSecret = { round:r, impostorIds, groupWord, impostorWord: pureMode ? null : impostorWord };
+    this.impVotes = null;
+    this.state.g.round = r;
+    this.state.g.order = order;
+    this.state.g.turnIndex = 0;
+    this.state.g.clues[r] = [];
+    this.state.g.ready[r] = {};
+    this.state.g.voteCount[r] = 0;
+    this.state.g.accusedId[r] = null;
+    this.state.g.impostorIds[r] = null;
+    this.state.g.groupWord[r] = null;
+    this.state.g.impostorWord[r] = null;
+    this.state.g.caughtId[r] = null;
+    this.state.g.guessResult[r] = null;
+    this.state.phase = 'impWord';
+    this.state.stage = (this.state.stage||0) + 1;
+    this.broadcastState();
+    this.players().forEach(p=>{
+      const isImp = impostorIds.includes(p.id);
+      const word = isImp ? (pureMode ? null : impostorWord) : groupWord;
+      const allyId = isImp && impostorIds.length>1 ? impostorIds.find(id=>id!==p.id) : null;
+      const allyName = allyId ? (this.playerById(allyId)?.name || null) : null;
+      const payload = { round:r, isImpostor:isImp, word, allyName };
+      if(p.id === this.myId) this.impReceiveWord(payload);
+      else if(!p.isBot) this.send('impWord', { to:p.id, ...payload });
+      if(p.isBot){
+        this.later(()=>{
+          if(!this.isHost || this.state.phase!=='impWord' || this.state.g.round!==r) return;
+          this.impSetReady(p.id);
+        }, 700 + Math.random()*1300);
+      }
+    });
+    clearInterval(this.impWatch);
+    const readyDeadline = Date.now() + 25000;
+    this.impWatch = setInterval(()=>{
+      if(!this.isHost || this.state.phase!=='impWord' || this.state.g.round!==r){ clearInterval(this.impWatch); return; }
+      if(Date.now() >= readyDeadline){
+        clearInterval(this.impWatch);
+        let changed = false;
+        this.players().forEach(p=>{ if(!this.state.g.ready[r][p.id]){ this.state.g.ready[r][p.id]=true; changed=true; } });
+        if(changed) this.broadcastState();
+        this.impStartClue();
+      }
+    }, 500);
+  }
+  // Guest/host client-side: received our own private word/role.
+  impReceiveWord(payload){
+    this.local.impMyWord = payload.word;
+    this.local.impIsImpostor = payload.isImpostor;
+    this.local.impAllyName = payload.allyName;
+    this.local.impWordArrived = true;
+    this.renderScreen();
+  }
+  runImpIntro(){
+    this.later(()=>{ this.local.impCountdown=3; this.renderScreen(); }, 900);
+    this.later(()=>{ this.local.impCountdown=2; this.renderScreen(); }, 1600);
+    this.later(()=>{ this.local.impCountdown=1; this.renderScreen(); }, 2300);
+    this.later(()=>{ this.local.impIntro=false; this.local.impCountdown=null; this.renderScreen(); }, 3000);
+  }
+  impConfirmReady(){
+    if(!this.state || this.local.impReadyConfirmed) return;
+    this.local.impReadyConfirmed = true;
+    this.renderScreen();
+    if(this.isHost) this.impSetReady(this.myId);
+    else this.sendAction('impReady', { id:this.myId, round:this.state.g.round });
+  }
+  // Host-only: no secret info here, just a boolean — safe to broadcast freely.
+  impSetReady(playerId){
+    if(!this.isHost) return;
+    const r = this.state.g.round;
+    if(!this.state.g.ready[r]) this.state.g.ready[r] = {};
+    if(this.state.g.ready[r][playerId]) return;
+    this.state.g.ready[r][playerId] = true;
+    this.broadcastState();
+    if(this.players().every(p=>this.state.g.ready[r][p.id])){ clearInterval(this.impWatch); this.later(()=>this.impStartClue(), 500); }
+  }
+  impStartClue(){
+    if(!this.isHost) return;
+    if(this.state.phase!=='impWord') return;
+    clearInterval(this.impWatch);
+    this.state.g.turnIndex = 0;
+    this.state.g.clueEndAt = Date.now() + this.state.gameConfig.clueTime*1000;
+    this.state.phase = 'impClue';
+    this.state.stage = (this.state.stage||0) + 1;
+    this.broadcastState();
+    this.impArmClueBot();
+    this.impWatchClueTimeout();
+  }
+  impCurrentTurnPlayerId(){ return this.state.g.order[this.state.g.turnIndex]; }
+  impWatchClueTimeout(){
+    clearInterval(this.impWatch);
+    const r = this.state.g.round, turn = this.state.g.turnIndex;
+    this.impWatch = setInterval(()=>{
+      if(!this.isHost || this.state.phase!=='impClue' || this.state.g.round!==r || this.state.g.turnIndex!==turn){ clearInterval(this.impWatch); return; }
+      if(Date.now() >= this.state.g.clueEndAt){ clearInterval(this.impWatch); this.impSubmitClue(this.impCurrentTurnPlayerId(), '', true); }
+    }, 400);
+  }
+  impArmClueBot(){
+    const pid = this.impCurrentTurnPlayerId();
+    const p = this.playerById(pid);
+    if(!p || !p.isBot) return;
+    const total = this.state.gameConfig.clueTime*1000;
+    const delay = total*0.3 + Math.random()*total*0.45;
+    const r = this.state.g.round, turn = this.state.g.turnIndex;
+    this.later(()=>{
+      if(!this.isHost || this.state.phase!=='impClue' || this.state.g.round!==r || this.state.g.turnIndex!==turn) return;
+      const word = BOT_WORD_POOL[Math.floor(Math.random()*BOT_WORD_POOL.length)];
+      this.impSubmitClue(pid, word, false);
+    }, delay);
+  }
+  // Host-only: the only place a clue actually advances the turn — clues
+  // themselves are meant to be public the instant they're given (unlike
+  // the secret word), so this is safe to write straight into state.g.
+  impSubmitClue(pid, text, auto){
+    if(!this.isHost) return;
+    if(this.state.phase!=='impClue' || this.impCurrentTurnPlayerId()!==pid) return;
+    clearInterval(this.impWatch);
+    const clean = (text||'').trim().slice(0,40) || (auto ? '(sin pista)' : '');
+    const r = this.state.g.round;
+    this.state.g.clues[r] = [...(this.state.g.clues[r]||[]), {id:pid, text:clean}];
+    this.state.g.turnIndex++;
+    if(this.state.g.turnIndex >= this.state.g.order.length){
+      this.impStartDiscuss();
+    } else {
+      this.state.g.clueEndAt = Date.now() + this.state.gameConfig.clueTime*1000;
+      this.state.stage = (this.state.stage||0) + 1;
+      this.broadcastState();
+      this.impArmClueBot();
+      this.impWatchClueTimeout();
+    }
+  }
+  impSendClue(){
+    if(!this.state || this.state.phase!=='impClue') return;
+    if(this.impCurrentTurnPlayerId()!==this.myId) return;
+    const text = (this.local.impClueDraft||'').trim();
+    if(!text) return;
+    this.local.impClueDraft = '';
+    if(this.isHost) this.impSubmitClue(this.myId, text, false);
+    else this.sendAction('impClue', { id:this.myId, round:this.state.g.round, text });
+  }
+  impStartDiscuss(){
+    if(!this.isHost) return;
+    this.state.g.discussEndAt = Date.now() + this.state.gameConfig.discussTime*1000;
+    this.state.phase = 'impDiscuss';
+    this.state.stage = (this.state.stage||0) + 1;
+    this.broadcastState();
+    clearInterval(this.impWatch);
+    const r = this.state.g.round;
+    this.impWatch = setInterval(()=>{
+      if(!this.isHost || this.state.phase!=='impDiscuss' || this.state.g.round!==r){ clearInterval(this.impWatch); return; }
+      if(Date.now() >= this.state.g.discussEndAt){ clearInterval(this.impWatch); this.impStartVote(); }
+    }, 500);
+  }
+  impStartVote(){
+    if(!this.isHost) return;
+    if(this.state.phase!=='impDiscuss') return;
+    clearInterval(this.impWatch);
+    const r = this.state.g.round;
+    this.state.g.voteEndAt = Date.now() + this.state.gameConfig.voteTime*1000;
+    this.state.g.voteCount[r] = 0;
+    this.impVotes = {};
+    this.state.phase = 'impVote';
+    this.state.stage = (this.state.stage||0) + 1;
+    this.broadcastState();
+    this.players().forEach(p=>{
+      if(!p.isBot) return;
+      const total = this.state.gameConfig.voteTime*1000;
+      const delay = total*0.3 + Math.random()*total*0.5;
+      this.later(()=>{
+        if(!this.isHost || this.state.phase!=='impVote' || this.state.g.round!==r) return;
+        const others = this.players().filter(pl=>pl.id!==p.id);
+        if(!others.length) return;
+        const target = others[Math.floor(Math.random()*others.length)];
+        this.impCastVote(p.id, target.id);
+      }, delay);
+    });
+    this.impWatch = setInterval(()=>{
+      if(!this.isHost || this.state.phase!=='impVote' || this.state.g.round!==r){ clearInterval(this.impWatch); return; }
+      const allVoted = Object.keys(this.impVotes||{}).length >= this.players().length;
+      if(allVoted || Date.now() >= this.state.g.voteEndAt){ clearInterval(this.impWatch); this.impStartReveal(); }
+    }, 400);
+  }
+  // Host-only: votes are tallied here, off to the side, until the round
+  // closes — only the headcount (not who voted for whom) is broadcast.
+  impCastVote(voterId, targetId){
+    if(!this.isHost) return;
+    if(this.state.phase!=='impVote') return;
+    this.impVotes = this.impVotes || {};
+    if(this.impVotes[voterId]) return;
+    this.impVotes[voterId] = targetId;
+    this.state.g.voteCount[this.state.g.round] = Object.keys(this.impVotes).length;
+    this.broadcastState();
+  }
+  impVote(targetId){
+    if(!this.state || this.state.phase!=='impVote' || this.local.impVoted) return;
+    this.local.impVoted = true;
+    this.local.impVotedFor = targetId;
+    this.renderScreen();
+    if(this.isHost) this.impCastVote(this.myId, targetId);
+    else this.sendAction('impVote', { id:this.myId, round:this.state.g.round, targetId });
+  }
+  impStartReveal(){
+    if(!this.isHost) return;
+    if(this.state.phase!=='impVote') return;
+    clearInterval(this.impWatch);
+    const r = this.state.g.round;
+    const tally = {}; this.players().forEach(p=>tally[p.id]=0);
+    Object.values(this.impVotes||{}).forEach(t=>{ if(tally[t]!=null) tally[t]++; });
+    const maxV = Math.max(0, ...Object.values(tally));
+    const top = Object.keys(tally).filter(id=>tally[id]===maxV && maxV>0);
+    const accusedId = top.length===1 ? top[0] : null; // tie or nobody voted -> nobody accused
+    const secret = this.impSecret || {impostorIds:[], groupWord:'', impostorWord:null};
+    const caught = accusedId && secret.impostorIds.includes(accusedId) ? accusedId : null;
+    this.state.g.votes[r] = tally;
+    this.state.g.voteDetail[r] = {...(this.impVotes||{})};
+    this.state.g.accusedId[r] = accusedId;
+    this.state.g.impostorIds[r] = secret.impostorIds;
+    this.state.g.groupWord[r] = secret.groupWord;
+    this.state.g.impostorWord[r] = secret.impostorWord;
+    this.state.g.caughtId[r] = caught;
+    this.state.phase = 'impReveal';
+    this.state.stage = (this.state.stage||0) + 1;
+    this.broadcastState();
+  }
+  // Host-only, host-clicked: reveal is a two-step read (tally, then
+  // identity) paced by the player, not a timer — see impStartResults.
+  impContinueReveal(){
+    if(!this.isHost) return;
+    if(this.state.phase!=='impReveal') return;
+    const r = this.state.g.round;
+    if(this.state.g.caughtId[r]) this.impStartGuess();
+    else this.impStartResults();
+  }
+  impStartGuess(){
+    if(!this.isHost) return;
+    const r = this.state.g.round, caughtId = this.state.g.caughtId[r];
+    this.state.phase = 'impGuess';
+    this.state.stage = (this.state.stage||0) + 1;
+    this.broadcastState();
+    const p = this.playerById(caughtId);
+    if(p && p.isBot){
+      this.later(()=>{
+        if(!this.isHost || this.state.phase!=='impGuess' || this.state.g.round!==r) return;
+        const guessRight = Math.random() < 0.3;
+        const guess = guessRight ? this.state.g.groupWord[r] : BOT_WORD_POOL[Math.floor(Math.random()*BOT_WORD_POOL.length)];
+        this.impSubmitGuess(caughtId, guess);
+      }, 2200 + Math.random()*2000);
+    }
+    this.later(()=>{
+      if(this.isHost && this.state.phase==='impGuess' && this.state.g.round===r && !this.state.g.guessResult[r]) this.impSubmitGuess(caughtId, '');
+    }, 22000);
+  }
+  // Host-only: the only place a guess is checked against the real word —
+  // nobody but the caught impostor's own client ever typed it.
+  impSubmitGuess(pid, guessText){
+    if(!this.isHost) return;
+    const r = this.state.g.round;
+    if(this.state.phase!=='impGuess' || this.state.g.caughtId[r]!==pid || this.state.g.guessResult[r]) return;
+    const correct = !!guessText && norm(guessText) === norm(this.state.g.groupWord[r]||'');
+    this.state.g.guessResult[r] = { guess:guessText, correct };
+    this.broadcastState();
+  }
+  impSendGuess(){
+    if(!this.state || this.state.phase!=='impGuess') return;
+    const r = this.state.g.round;
+    if(this.state.g.caughtId[r]!==this.myId) return;
+    const text = (this.local.impGuessDraft||'').trim();
+    if(!text) return;
+    this.local.impGuessDraft = '';
+    if(this.isHost) this.impSubmitGuess(this.myId, text);
+    else this.sendAction('impGuess', { id:this.myId, round:r, text });
+    this.renderScreen();
+  }
+  impStartResults(){
+    if(!this.isHost) return;
+    const r = this.state.g.round;
+    this.state.g.roundScores[r] = this.impRoundScores(r);
+    this.state.phase = 'impResults';
+    this.state.stage = (this.state.stage||0) + 1;
+    this.broadcastState();
+  }
+  impRoundScores(r){
+    const out = {}; this.players().forEach(p=>out[p.id]=0);
+    const impostorIds = this.state.g.impostorIds[r] || [];
+    const caughtId = this.state.g.caughtId[r];
+    const guess = this.state.g.guessResult[r];
+    const groupCaughtSomeone = !!caughtId;
+    this.players().forEach(p=>{
+      if(impostorIds.includes(p.id)){
+        if(p.id===caughtId) out[p.id] = (guess && guess.correct) ? 5 : 0;
+        else out[p.id] = 3;
+      } else {
+        out[p.id] = groupCaughtSomeone ? 3 : 1;
+      }
+    });
+    return out;
+  }
+  impTotals(uptoRound){
+    const t = {}; this.players().forEach(p=>t[p.id]=0);
+    for(let r=0;r<=uptoRound;r++){ if(this.state.g.impostorIds[r]==null) continue; const pts=this.impRoundScores(r); for(const id in pts) t[id]=(t[id]||0)+pts[id]; }
+    return t;
+  }
+  impNext(){
+    if(!this.isHost) return;
+    if(this.state.g.round+1 < this.state.gameConfig.rounds){ this.impStartRound(this.state.g.round+1); }
+    else { this.state.phase='impFinal'; this.state.stage=(this.state.stage||0)+1; this.broadcastState(); }
+  }
+  impPlayAgain(){
+    if(!this.isHost) return;
+    this.impSecret = null; this.impVotes = null;
+    this.state.g = this.impFreshG();
+    this.state.phase = 'lobby';
+    this.state.stage = (this.state.stage||0) + 1;
+    this.broadcastState();
+  }
+  impFinalStats(){
+    const s = this.state, cfg = s.gameConfig, pl = this.players(), byId = {}; pl.forEach(p=>byId[p.id]=p);
+    const survived={}, caught={}, correctGuess={}, votesReceived={}, deception={}, detective={};
+    pl.forEach(p=>{ survived[p.id]=0; caught[p.id]=0; correctGuess[p.id]=0; votesReceived[p.id]=0; deception[p.id]=0; detective[p.id]=0; });
+    for(let r=0;r<cfg.rounds;r++){
+      const impostorIds = s.g.impostorIds[r]; if(impostorIds==null) continue;
+      const caughtId = s.g.caughtId[r];
+      const votes = s.g.votes[r]||{};
+      const detail = s.g.voteDetail[r]||{};
+      const guess = s.g.guessResult[r];
+      impostorIds.forEach(id=>{
+        if(id===caughtId) caught[id]++; else survived[id]++;
+        if((votes[id]||0)===0) deception[id]++;
+      });
+      if(caughtId && guess && guess.correct) correctGuess[caughtId]++;
+      pl.forEach(p=>{ votesReceived[p.id] += (votes[p.id]||0); });
+      Object.entries(detail).forEach(([voterId,targetId])=>{ if(impostorIds.includes(targetId)) detective[voterId] = (detective[voterId]||0)+1; });
+    }
+    const topBy = (obj)=>{ const e = Object.entries(obj).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1])[0]; return e ? {pid:e[0], n:e[1]} : null; };
+    const bestImpostor = topBy(survived), bestDetective = topBy(detective), mostCaught = topBy(votesReceived),
+          bestGuesser = topBy(correctGuess), bestDeceiver = topBy(deception), mostSurvived = topBy(caught);
+    return [
+      bestImpostor && {label:'Mejor infiltrado', value:byId[bestImpostor.pid]?.name||'?', sub:bestImpostor.n+(bestImpostor.n>1?' rondas sin ser descubierto':' ronda sin ser descubierto'), bg:INK, dark:true},
+      bestDetective && {label:'Más infiltrados descubiertos', value:byId[bestDetective.pid]?.name||'?', sub:bestDetective.n+(bestDetective.n>1?' aciertos':' acierto'), bg:MINT},
+      bestGuesser && {label:'Mejor adivinador', value:byId[bestGuesser.pid]?.name||'?', sub:bestGuesser.n+(bestGuesser.n>1?' palabras adivinadas':' palabra adivinada'), bg:VIOLET},
+      mostCaught && {label:'Más votos recibidos', value:byId[mostCaught.pid]?.name||'?', sub:mostCaught.n+(mostCaught.n>1?' votos en total':' voto en total'), bg:YEL},
+      bestDeceiver && {label:'Mejor capacidad de engaño', value:byId[bestDeceiver.pid]?.name||'?', sub:bestDeceiver.n+(bestDeceiver.n>1?' rondas sin recibir votos':' ronda sin recibir votos'), bg:PINK},
+    ].filter(Boolean);
+  }
+  impStartLocalTimer(kind){
+    const screenOf = {clue:'impClue', discuss:'impDiscuss', vote:'impVote'};
+    clearInterval(this.tick);
+    this.tick = setInterval(()=>{
+      if(this.local.screen!==screenOf[kind] || !this.state){ clearInterval(this.tick); return; }
+      const endAt = kind==='clue' ? this.state.g.clueEndAt : kind==='discuss' ? this.state.g.discussEndAt : this.state.g.voteEndAt;
+      const left = Math.max(0, Math.round((endAt - Date.now())/1000));
+      this.impPatchTimer(kind, left);
+      if(left<=0) clearInterval(this.tick);
+    }, 500);
+  }
+  impPatchTimer(kind, left){
+    const total = kind==='clue' ? this.state.gameConfig.clueTime : kind==='discuss' ? this.state.gameConfig.discussTime : this.state.gameConfig.voteTime;
+    const textEl = this.root.querySelector('[data-el="impTimerText"]');
+    const barEl = this.root.querySelector('[data-el="impTimerBar"]');
+    const boxEl = this.root.querySelector('[data-el="impTimerBox"]');
+    if(textEl) textEl.textContent = mmss(left);
+    if(barEl) barEl.style.width = (left/total*100)+'%';
+    const urgent = left<=10;
+    if(barEl) barEl.style.background = urgent ? CORAL : INK;
+    if(boxEl){ boxEl.style.background = urgent ? CORAL : '#fff'; boxEl.style.animation = urgent ? 'tick 1s ease-in-out infinite' : 'none'; }
+  }
+
+  /* ================= IMPOSTOR — screens ================= */
+  viewImpostorConfig(){
+    const cfg = this.impDraft;
+    const roundOpts = [3,5,7,8,10].map(n=>`<button data-action="impSetRounds" data-val="${n}" style="height:48px;border-radius:14px;border:2px solid ${INK};background:${cfg.rounds===n?INK:'#fff'};color:${cfg.rounds===n?'var(--cream)':INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:16px">${n}</button>`).join('');
+    const countOpts = [{v:'auto',l:'Auto'},{v:1,l:'1'},{v:2,l:'2'}].map(o=>`<button data-action="impSetCount" data-val="${o.v}" style="height:48px;border-radius:14px;border:2px solid ${INK};background:${cfg.impostorCount===o.v?INK:'#fff'};color:${cfg.impostorCount===o.v?'var(--cream)':INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:16px">${o.l}</button>`).join('');
+    const clueOpts = [15,20,30,45].map(n=>`<button data-action="impSetClueTime" data-val="${n}" style="height:48px;border-radius:14px;border:2px solid ${INK};background:${cfg.clueTime===n?INK:'#fff'};color:${cfg.clueTime===n?'var(--cream)':INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:16px">${n}s</button>`).join('');
+    const discussOpts = [30,60,90,120].map(n=>`<button data-action="impSetDiscussTime" data-val="${n}" style="height:48px;border-radius:14px;border:2px solid ${INK};background:${cfg.discussTime===n?INK:'#fff'};color:${cfg.discussTime===n?'var(--cream)':INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:16px">${n}s</button>`).join('');
+    const voteOpts = [15,20,30,45].map(n=>`<button data-action="impSetVoteTime" data-val="${n}" style="height:48px;border-radius:14px;border:2px solid ${INK};background:${cfg.voteTime===n?INK:'#fff'};color:${cfg.voteTime===n?'var(--cream)':INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:16px">${n}s</button>`).join('');
+    const modeCard = (val, title, desc)=>`<button data-action="impSetMode" data-val="${val}" style="text-align:left;display:flex;flex-direction:column;gap:4px;padding:14px 16px;border-radius:16px;border:2px solid ${INK};background:${cfg.mode===val?MINT:'#fff'}">
+      <div style="font-weight:800;font-size:16px">${title}</div>
+      <div style="font-size:13px;font-weight:600;color:var(--muted)">${desc}</div>
+    </button>`;
+    const estimate = '≈ '+gameEstimateMinutes('impostor')+' min de juego';
+    return `<div class="screen screen-narrow" style="padding-top:28px;padding-bottom:28px">
+      <div class="top-bar"><button class="icon-btn" data-action="backToPicker" aria-label="Volver">${this.iconBack()}</button><div class="heading" style="font-size:28px">Impostor</div></div>
+      <div style="flex:1;display:flex;flex-direction:column;justify-content:center;gap:22px;padding:16px 0">
+        <div style="background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:6px 18px;display:flex;flex-direction:column">
+          <div style="display:flex;flex-direction:column;gap:10px;padding:14px 0;border-bottom:2px solid var(--panel-line)">
+            <div style="font-weight:800;font-size:17px">Rondas</div>
+            <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:6px">${roundOpts}</div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:10px;padding:14px 0;border-bottom:2px solid var(--panel-line)">
+            <div style="font-weight:800;font-size:17px">Infiltrados</div>
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">${countOpts}</div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:10px;padding:14px 0;border-bottom:2px solid var(--panel-line)">
+            <div style="font-weight:800;font-size:17px">Tiempo por pista</div>
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px">${clueOpts}</div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:10px;padding:14px 0;border-bottom:2px solid var(--panel-line)">
+            <div style="font-weight:800;font-size:17px">Tiempo de discusión</div>
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px">${discussOpts}</div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:10px;padding:14px 0">
+            <div style="font-weight:800;font-size:17px">Tiempo para votar</div>
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px">${voteOpts}</div>
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <div style="font-weight:800;font-size:17px;padding:0 4px">Modo de juego</div>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            ${modeCard('classic','Clásico','El infiltrado recibe una palabra relacionada — también puede dar pistas.')}
+            ${modeCard('pure','Infiltrado puro','El infiltrado no recibe ninguna palabra. Mucho más difícil.')}
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:14px">
+          <div style="text-align:center;font-size:14px;font-weight:700;color:var(--muted)">${estimate}</div>
+          <button class="btn-primary" data-action="confirmImpostorConfig">SIGUIENTE</button>
+        </div>
+      </div>
+    </div>`;
+  }
+  viewImpWord(){
+    const s = this.state;
+    if(this.local.impIntro){
+      return `<div style="min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;text-align:center;padding:20px">
+        <div style="font-size:15px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)">RONDA ${s.g.round+1}</div>
+        ${this.local.impCountdown==null
+          ? `<div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:20px;letter-spacing:.06em;text-transform:uppercase;animation:rise .3s both">Preparados...</div>`
+          : `<div style="width:140px;height:140px;border-radius:50%;background:${INK};color:var(--cream);display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:72px;animation:pop .4s cubic-bezier(.3,1.6,.5,1) both">${this.local.impCountdown}</div>`}
+      </div>`;
+    }
+    if(!this.local.impWordArrived){
+      return `<div style="min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px"><div class="spinner"></div><div style="font-weight:700;color:var(--muted)">Preparando tu información…</div></div>`;
+    }
+    if(this.local.impReadyConfirmed){
+      const pl = this.players();
+      const readyMap = (s.g.ready && s.g.ready[s.g.round]) || {};
+      const rows = pl.map(p=>{
+        const ready = !!readyMap[p.id];
+        return `<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-top:2px solid var(--panel-line)">
+          <div style="width:30px;height:30px;flex:0 0 auto">${avatarSVG(p.avatar,30)}</div>
+          <div style="flex:1;min-width:0;font-weight:800;font-size:15px">${esc(p.name)}${p.id===this.myId?' (vos)':''}</div>
+          ${ready ? this.iconCheckSmall() : `<span style="color:var(--muted);font-weight:800;letter-spacing:.1em">···</span>`}
+        </div>`;
+      }).join('');
+      return `<div class="screen screen-narrow" style="padding-top:28px;padding-bottom:28px;justify-content:center">
+        <div style="display:flex;flex-direction:column;align-items:center;gap:8px;text-align:center">
+          <div class="heading" style="font-size:26px">ESTÁS LISTO</div>
+          <div style="font-size:14px;font-weight:700;color:var(--muted)">Esperá a que todos estén preparados.</div>
+        </div>
+        <div class="card" style="padding:4px 18px;margin-top:20px">${rows}</div>
+      </div>`;
+    }
+    const isImp = this.local.impIsImpostor, pure = this.state.gameConfig.mode==='pure';
+    let card;
+    if(isImp && pure){
+      card = `<div style="background:${INK};color:var(--cream);border:2.5px solid ${INK};border-radius:28px;box-shadow:0 6px 0 ${INK};padding:32px 24px;display:flex;flex-direction:column;align-items:center;gap:12px;text-align:center">
+        ${this.iconMask(48,'var(--cream)')}
+        <div class="heading" style="font-size:26px;color:var(--cream)">SOS EL INFILTRADO</div>
+        <div style="font-size:15px;font-weight:600;opacity:.85">No recibiste una palabra.</div>
+        <div style="font-size:15px;font-weight:600;opacity:.85">Escuchá las pistas de los demás y tratá de descubrirla.</div>
+        ${this.local.impAllyName?`<div style="margin-top:4px;padding:8px 14px;border-radius:999px;background:${VIOLET};font-weight:800;font-size:13px">Tu aliado/a es ${esc(this.local.impAllyName)}</div>`:''}
+      </div>`;
+    } else if(isImp){
+      card = `<div style="background:${INK};color:var(--cream);border:2.5px solid ${INK};border-radius:28px;box-shadow:0 6px 0 ${INK};padding:32px 24px;display:flex;flex-direction:column;align-items:center;gap:8px;text-align:center">
+        ${this.iconMask(40,'var(--cream)')}
+        <div class="heading" style="font-size:24px;color:var(--cream)">SOS EL INFILTRADO</div>
+        <div style="font-size:14px;font-weight:600;opacity:.8">Tu palabra es:</div>
+        <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:44px;letter-spacing:-.01em">${esc((this.local.impMyWord||'').toUpperCase())}</div>
+        ${this.local.impAllyName?`<div style="margin-top:4px;padding:8px 14px;border-radius:999px;background:${VIOLET};font-weight:800;font-size:13px">Tu aliado/a es ${esc(this.local.impAllyName)}</div>`:''}
+      </div>`;
+    } else {
+      card = `<div style="background:#fff;border:2.5px solid ${INK};border-radius:28px;box-shadow:0 6px 0 ${INK};padding:32px 24px;display:flex;flex-direction:column;align-items:center;gap:8px;text-align:center">
+        <div style="font-size:13px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)">TU PALABRA</div>
+        <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:44px;letter-spacing:-.01em">${esc((this.local.impMyWord||'').toUpperCase())}</div>
+        <div style="font-size:14px;font-weight:600;color:var(--muted)">Recordá la palabra. No se la muestres a nadie.</div>
+      </div>`;
+    }
+    return `<div class="screen screen-narrow" style="padding-top:28px;padding-bottom:28px;justify-content:center">
+      ${card}
+      <div style="margin-top:20px"><button class="btn-primary" data-action="impConfirmReady">ESTOY LISTO</button></div>
+    </div>`;
+  }
+  viewImpClue(){
+    const s = this.state, cfg = s.gameConfig;
+    const order = s.g.order, pl = this.players(), byId = {}; pl.forEach(p=>byId[p.id]=p);
+    const turnId = order[s.g.turnIndex];
+    const turnPlayer = byId[turnId];
+    const isMyTurn = turnId === this.myId;
+    const clues = s.g.clues[s.g.round] || [];
+    const clueById = {}; clues.forEach(c=>clueById[c.id]=c.text);
+    const rows = order.map((pid,i)=>{
+      const p = byId[pid]; if(!p) return '';
+      const done = clueById[pid] != null;
+      const active = i === s.g.turnIndex;
+      return `<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:16px;background:${active?YEL:'#fff'};border:2px solid ${INK};${active?`box-shadow:0 3px 0 ${INK}`:''}">
+        <div style="width:32px;height:32px;flex:0 0 auto">${avatarSVG(p.avatar,32)}</div>
+        <div style="flex:0 0 auto;font-weight:800;font-size:15px;max-width:32%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.name)}</div>
+        ${done?`<div style="flex:1;min-width:0;font-weight:700;font-size:15px;overflow-wrap:anywhere;text-align:right">"${esc(clueById[pid])}"</div>`
+          :active?`<div style="flex:1;text-align:right;font-size:13px;font-weight:800">Pensando…</div>`
+          :`<div style="flex:1;text-align:right;font-size:13px;font-weight:700;color:var(--muted)">Espera su turno</div>`}
+      </div>`;
+    }).join('');
+    const wordChip = this.local.impIsImpostor
+      ? `<div style="display:flex;align-items:center;gap:8px;padding:8px 14px;border-radius:999px;background:${INK};color:var(--cream);font-weight:800;font-size:13px">${this.iconMask(14,'var(--cream)')} ${this.local.impMyWord?esc(this.local.impMyWord.toUpperCase()):'SOS EL INFILTRADO'}</div>`
+      : `<div style="display:flex;align-items:center;gap:8px;padding:8px 14px;border-radius:999px;background:#fff;border:2px solid ${INK};font-weight:800;font-size:13px">${esc((this.local.impMyWord||'').toUpperCase())}</div>`;
+    return `<div style="min-height:100vh;display:flex;flex-direction:column">
+      <div style="position:sticky;top:0;z-index:10;background:var(--cream)">
+        <div style="max-width:720px;margin:0 auto;padding:12px 20px;display:flex;align-items:center;gap:12px">
+          <button class="icon-btn" data-action="askLeave" aria-label="Salir">${this.iconClose()}</button>
+          <div style="flex:1;min-width:0;display:flex;align-items:baseline;gap:6px;font-family:'Bricolage Grotesque',sans-serif;font-weight:800"><span style="font-size:20px">RONDA ${s.g.round+1}</span><span style="font-size:14px;color:var(--muted)">de ${cfg.rounds}</span></div>
+          <div data-el="impTimerBox" style="display:flex;align-items:center;gap:8px;height:46px;padding:0 14px;border-radius:999px;border:2px solid ${INK};background:#fff;box-shadow:0 3px 0 ${INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:22px;font-variant-numeric:tabular-nums">${this.iconClock()}<span data-el="impTimerText">${mmss(cfg.clueTime)}</span></div>
+        </div>
+        <div style="height:6px;background:var(--line)"><div data-el="impTimerBar" style="height:100%;width:100%;background:${INK};transition:width 1s linear,background .3s"></div></div>
+      </div>
+      <div style="flex:1;width:100%;max-width:560px;margin:0 auto;padding:16px 20px 0;display:flex;flex-direction:column;gap:14px">
+        <div style="display:flex;justify-content:center">${wordChip}</div>
+        <div style="text-align:center;font-size:13px;font-weight:800;letter-spacing:.1em;text-transform:uppercase">${isMyTurn?'Tu turno — dá tu pista':'Turno de '+esc(turnPlayer?turnPlayer.name:'?')}</div>
+        <div style="display:flex;flex-direction:column;gap:8px">${rows}</div>
+      </div>
+      <div class="sticky-bottom" style="margin:0 -20px;padding:16px 20px 20px">
+        ${isMyTurn
+          ? `<div style="display:flex;gap:10px">
+              <input data-role="imp-clue-input" value="${esc(this.local.impClueDraft)}" placeholder="Tu pista" autocomplete="off" maxlength="40" style="flex:1;min-width:0;height:56px;border-radius:16px;border:2px solid ${INK};background:#fff;padding:0 18px;font-size:17px;font-weight:700;color:${INK};outline:none">
+              <button class="btn-primary" data-action="impSendClue" style="width:auto;padding:0 22px">ENVIAR</button>
+            </div>`
+          : `<div style="height:56px;border-radius:16px;border:2px solid ${INK};background:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;color:var(--muted)">Esperando la pista de ${esc(turnPlayer?turnPlayer.name:'?')}…</div>`}
+      </div>
+    </div>`;
+  }
+  viewImpDiscuss(){
+    const s = this.state, cfg = s.gameConfig, pl = this.players(), byId = {}; pl.forEach(p=>byId[p.id]=p);
+    const clues = s.g.clues[s.g.round] || [];
+    const rows = clues.map(c=>{
+      const p = byId[c.id]; if(!p) return '';
+      return `<div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:2px solid var(--panel-line)">
+        <div style="width:34px;height:34px;flex:0 0 auto">${avatarSVG(p.avatar,34)}</div>
+        <div style="flex:0 0 auto;font-weight:800;font-size:15px">${esc(p.name)}</div>
+        <div style="flex:1;min-width:0;text-align:right;font-weight:700;font-size:16px;overflow-wrap:anywhere">"${esc(c.text)}"</div>
+      </div>`;
+    }).join('');
+    const bottom = this.isHost
+      ? `<button class="btn-primary" data-action="impStartVoteNow">EMPEZAR VOTACIÓN</button>`
+      : `<div style="text-align:center;font-size:13px;font-weight:700;color:var(--muted)">Usá el chat para discutir — el anfitrión puede pasar a votar cuando quieran.</div>`;
+    return `<div class="screen">
+      <div style="display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center">
+        <div class="heading" style="font-size:clamp(28px,7vw,40px);letter-spacing:-.02em">¿QUIÉN ES EL INFILTRADO?</div>
+        <div data-el="impTimerBox" style="display:flex;align-items:center;gap:8px;height:46px;padding:0 16px;border-radius:999px;border:2px solid ${INK};background:#fff;box-shadow:0 3px 0 ${INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:22px;font-variant-numeric:tabular-nums">${this.iconClock()}<span data-el="impTimerText">${mmss(cfg.discussTime)}</span></div>
+        <div style="height:6px;width:100%;max-width:300px;border-radius:3px;background:var(--line);overflow:hidden"><div data-el="impTimerBar" style="height:100%;width:100%;background:${INK};transition:width 1s linear,background .3s"></div></div>
+      </div>
+      <div class="card" style="padding:6px 16px;max-width:600px;width:100%;margin:0 auto">${rows}</div>
+      <div style="text-align:center;font-size:13px;font-weight:700;color:var(--muted);display:flex;align-items:center;justify-content:center;gap:6px">${this.iconChat(16)} Discutan por el chat mientras dure el timer</div>
+      <div class="sticky-bottom">${bottom}</div>
+    </div>`;
+  }
+  viewImpVote(){
+    const s = this.state, cfg = s.gameConfig, pl = this.players();
+    const rows = pl.map(p=>{
+      const selected = this.local.impVotedFor === p.id;
+      return `<button data-action="impVote" data-pid="${p.id}" ${this.local.impVoted?'disabled':''} style="display:flex;align-items:center;gap:12px;width:100%;padding:12px 16px;border-radius:18px;border:2px solid ${selected?INK:'var(--line)'};background:${selected?'#FFEDE6':'#fff'};box-shadow:${selected?`0 4px 0 ${INK}`:'none'};text-align:left;opacity:${this.local.impVoted&&!selected?0.5:1}">
+        <div style="width:38px;height:38px;flex:0 0 auto">${avatarSVG(p.avatar,38)}</div>
+        <div style="flex:1;min-width:0;font-weight:800;font-size:17px">${esc(p.name)}${p.id===this.myId?' (vos)':''}</div>
+        <div style="width:22px;height:22px;border-radius:50%;border:2.5px solid ${INK};background:${selected?INK:'transparent'};flex:0 0 auto"></div>
+      </button>`;
+    }).join('');
+    const voted = (s.g.voteCount[s.g.round]||0);
+    return `<div class="screen screen-narrow" style="padding-top:28px;padding-bottom:28px">
+      <div style="display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center">
+        <div class="heading" style="font-size:clamp(28px,7vw,36px);letter-spacing:-.02em">VOTÁ AL INFILTRADO</div>
+        <div data-el="impTimerBox" style="display:flex;align-items:center;gap:8px;height:46px;padding:0 16px;border-radius:999px;border:2px solid ${INK};background:#fff;box-shadow:0 3px 0 ${INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:22px;font-variant-numeric:tabular-nums">${this.iconClock()}<span data-el="impTimerText">${mmss(cfg.voteTime)}</span></div>
+        <div style="height:6px;width:100%;max-width:260px;border-radius:3px;background:var(--line);overflow:hidden"><div data-el="impTimerBar" style="height:100%;width:100%;background:${INK};transition:width 1s linear,background .3s"></div></div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px">${rows}</div>
+      <div style="text-align:center;font-size:14px;font-weight:800;color:var(--muted)">${voted} / ${pl.length} jugadores votaron</div>
+      ${this.local.impVoted?`<div style="text-align:center;font-size:13px;font-weight:700;color:var(--muted)">Tu voto es secreto hasta que termine la votación.</div>`:''}
+    </div>`;
+  }
+  viewImpReveal(){
+    const s = this.state, r = s.g.round, pl = this.players(), byId = {}; pl.forEach(p=>byId[p.id]=p);
+    const votes = s.g.votes[r] || {};
+    const sorted = pl.slice().sort((a,b)=>(votes[b.id]||0)-(votes[a.id]||0));
+    const voteRows = sorted.map(p=>`<div style="display:flex;align-items:center;gap:12px;padding:8px 0">
+      <div style="width:32px;height:32px;flex:0 0 auto">${avatarSVG(p.avatar,32)}</div>
+      <div style="flex:1;min-width:0;font-weight:800;font-size:16px">${esc(p.name)}</div>
+      <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:18px">${votes[p.id]||0} ${votes[p.id]===1?'voto':'votos'}</div>
+    </div>`).join('');
+    if(this.local.impRevealPhase===0){
+      return `<div class="screen screen-narrow" style="padding-top:28px;padding-bottom:28px;justify-content:center">
+        <div style="text-align:center;font-size:14px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)">VOTACIÓN</div>
+        <div class="card" style="padding:6px 18px;margin-top:12px">${voteRows}</div>
+      </div>`;
+    }
+    const accusedId = s.g.accusedId[r];
+    const accused = accusedId ? (byId[accusedId] || {name:'Jugador desconectado', avatar:null}) : null;
+    const caughtId = s.g.caughtId[r];
+    const impostorIds = s.g.impostorIds[r] || [];
+    const impostorNames = impostorIds.map(id=>byId[id]?.name||'?');
+    let headline, icon;
+    if(!accused){
+      headline = 'LA VOTACIÓN QUEDÓ EMPATADA'; icon = this.iconSad(40);
+    } else if(caughtId){
+      headline = esc(accused.name).toUpperCase()+(impostorIds.length>1?' ERA UNO DE LOS INFILTRADOS':' ERA EL INFILTRADO');
+      icon = this.iconMask(40);
+    } else {
+      headline = esc(accused.name).toUpperCase()+' NO ERA EL INFILTRADO';
+      icon = this.iconSad(40);
+    }
+    return `<div class="screen screen-narrow" style="padding-top:28px;padding-bottom:28px;justify-content:center">
+      <div style="display:flex;flex-direction:column;align-items:center;gap:14px;text-align:center">
+        ${accused?`<div style="width:88px;height:88px">${avatarSVG(accused.avatar,88)}</div>`:icon}
+        <div class="heading" style="font-size:clamp(24px,7vw,32px);animation:pop .5s cubic-bezier(.3,1.6,.5,1) both">${headline}</div>
+        <div style="width:100%;background:#fff;border:2.5px solid ${INK};border-radius:24px;box-shadow:0 5px 0 ${INK};padding:20px;display:flex;flex-direction:column;gap:14px;animation:rise .4s .2s both">
+          <div>
+            <div style="font-size:12px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)">${impostorIds.length>1?'LOS INFILTRADOS ERAN':'EL INFILTRADO ERA'}</div>
+            <div class="heading" style="font-size:22px">${esc(impostorNames.join(' e '))}</div>
+          </div>
+          <div>
+            <div style="font-size:12px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)">SU PALABRA ERA</div>
+            <div class="heading" style="font-size:26px">${s.g.impostorWord[r]?esc(s.g.impostorWord[r].toUpperCase()):'(sin palabra — modo puro)'}</div>
+          </div>
+          <div>
+            <div style="font-size:12px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)">LA PALABRA DEL GRUPO ERA</div>
+            <div class="heading" style="font-size:26px">${esc((s.g.groupWord[r]||'').toUpperCase())}</div>
+          </div>
+        </div>
+      </div>
+      ${this.isHost?`<div style="margin-top:20px"><button class="btn-primary" data-action="impContinueReveal">${caughtId?'ÚLTIMA OPORTUNIDAD':'VER RESULTADOS'}</button></div>`
+        : `<div style="margin-top:20px;height:54px;border-radius:16px;border:2px solid ${INK};background:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;color:var(--muted)">Esperando al anfitrión…</div>`}
+    </div>`;
+  }
+  viewImpGuess(){
+    const s = this.state, r = s.g.round, caughtId = s.g.caughtId[r];
+    const caughtPlayer = this.playerById(caughtId);
+    const isMe = caughtId === this.myId;
+    const result = s.g.guessResult[r];
+    return `<div class="screen screen-narrow" style="padding-top:28px;padding-bottom:28px;justify-content:center">
+      <div style="display:flex;flex-direction:column;align-items:center;gap:12px;text-align:center">
+        ${isMe && !result ? `
+          <div class="heading" style="font-size:26px">¡TE DESCUBRIERON!</div>
+          <div style="font-size:15px;font-weight:600;color:var(--muted)">Pero todavía podés ganar.</div>
+          <div style="font-size:13px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-top:10px">¿CUÁL ERA LA PALABRA DEL GRUPO?</div>
+          <div style="display:flex;gap:10px;width:100%">
+            <input data-role="imp-guess-input" value="${esc(this.local.impGuessDraft)}" placeholder="Tu respuesta" autocomplete="off" maxlength="40" style="flex:1;min-width:0;height:56px;border-radius:16px;border:2px solid ${INK};background:#fff;padding:0 18px;font-size:17px;font-weight:700;color:${INK};outline:none">
+            <button class="btn-primary" data-action="impSendGuess" style="width:auto;padding:0 22px">ADIVINAR</button>
+          </div>
+        ` : !result ? `
+          <div class="heading" style="font-size:24px">${esc(caughtPlayer?caughtPlayer.name:'?')} FUE DESCUBIERTO/A</div>
+          <div style="font-size:15px;font-weight:600;color:var(--muted)">Está intentando adivinar la palabra del grupo…</div>
+          <div class="spinner" style="margin-top:10px"></div>
+        ` : result.correct ? `
+          ${this.iconMask(48)}
+          <div class="heading" style="font-size:28px">¡EL INFILTRADO SOBREVIVE!</div>
+          <div style="font-size:15px;font-weight:600;color:var(--muted)">${esc(caughtPlayer?caughtPlayer.name:'?')} adivinó "${esc((this.state.g.groupWord[r]||'').toUpperCase())}" y se salva.</div>
+        ` : `
+          ${this.iconParty(48)}
+          <div class="heading" style="font-size:28px">¡EL GRUPO GANA!</div>
+          <div style="font-size:15px;font-weight:600;color:var(--muted)">${esc(caughtPlayer?caughtPlayer.name:'?')} dijo "${esc(result.guess||'nada')}" — la palabra era "${esc((this.state.g.groupWord[r]||'').toUpperCase())}".</div>
+        `}
+      </div>
+      ${result && this.isHost ? `<div style="margin-top:20px"><button class="btn-primary" data-action="impStartResults">VER RESULTADOS</button></div>`
+        : result ? `<div style="margin-top:20px;height:54px;border-radius:16px;border:2px solid ${INK};background:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;color:var(--muted)">Esperando al anfitrión…</div>` : ''}
+    </div>`;
+  }
+  viewImpResults(){
+    const s = this.state, r = s.g.round, pl = this.players(), byId = {}; pl.forEach(p=>byId[p.id]=p);
+    const scores = s.g.roundScores[r] || {};
+    const impostorIds = s.g.impostorIds[r] || [];
+    const sorted = pl.slice().sort((a,b)=>(scores[b.id]||0)-(scores[a.id]||0));
+    const rows = sorted.map((p,i)=>{
+      const isImp = impostorIds.includes(p.id);
+      return `<div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:2px solid var(--panel-line);animation:rise .4s both;animation-delay:${(i*0.06).toFixed(2)}s">
+        <div style="width:30px;flex:0 0 auto">${isImp?this.iconMask(20):(i<3?this.iconCheckSmall():'')}</div>
+        <div style="width:34px;height:34px;flex:0 0 auto">${avatarSVG(p.avatar,34)}</div>
+        <div style="flex:1;min-width:0;font-weight:800;font-size:16px">${esc(p.name)}${p.id===this.myId?' (vos)':''}</div>
+        <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:20px;color:${(scores[p.id]||0)>0?'#0E8A66':'var(--muted)'}">+${scores[p.id]||0}</div>
+      </div>`;
+    }).join('');
+    const isLast = s.g.round+1 >= s.gameConfig.rounds;
+    const bottom = this.isHost
+      ? `<button class="btn-primary" data-action="goRanking">VER CLASIFICACIÓN</button>`
+      : `<div style="height:54px;border-radius:16px;border:2px solid ${INK};background:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;color:var(--muted)">Esperando al anfitrión…</div>`;
+    return `<div class="screen screen-narrow" style="padding-top:28px;padding-bottom:28px">
+      <div style="text-align:center;font-size:13px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)">RESULTADOS · RONDA ${r+1}${isLast?' (última)':''}</div>
+      <div class="card" style="padding:4px 18px;margin-top:8px">${rows}</div>
+      <div class="sticky-bottom">${bottom}</div>
+    </div>`;
+  }
+  viewImpRanking(){
+    const s = this.state, cfg = s.gameConfig, pl = this.players();
+    const cur = this.impTotals(s.g.round), prevT = s.g.round>0 ? this.impTotals(s.g.round-1) : null;
+    const nr = this.rankOf(cur), orr = prevT ? this.rankOf(prevT) : nr;
+    const ph = this.local.rankPhase===1;
+    const rows = pl.map(p=>{
+      const ni = nr.indexOf(p.id), oi = orr.indexOf(p.id), idx = ph?ni:oi, d = oi-ni;
+      const label = p.id===this.myId ? p.name+' (vos)' : p.name;
+      const total = ph ? cur[p.id] : (prevT ? prevT[p.id] : 0);
+      const bg = p.id===this.myId ? '#FFEDE6' : (idx===0 && ph ? '#FFF3CC' : '#fff');
+      const deltaText = d>0?'▲ Subió '+d : d<0?'▼ Bajó '+(-d) : 'Sin cambios';
+      const deltaColor = d>0?'#0E8A66':d<0?'#B3341A':INK;
+      const entrance = !ph ? `animation:rise .4s cubic-bezier(.3,1.5,.5,1) both;animation-delay:${(idx*0.06).toFixed(2)}s` : '';
+      return `<div style="position:absolute;left:0;right:0;top:${idx*104}px;min-height:88px;display:flex;align-items:center;gap:12px;padding:10px 16px 10px 10px;border-radius:22px;background:${bg};border:2px solid ${INK};box-shadow:0 4px 0 ${INK};transition:top .9s cubic-bezier(.34,1.45,.64,1);${entrance}">
+        <div style="flex:0 0 auto;width:44px;text-align:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:32px">${idx+1}</div>
+        <div style="width:46px;height:46px;flex:0 0 auto">${avatarSVG(p.avatar,46)}</div>
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
+          <div style="font-weight:800;font-size:18px">${esc(label)}</div>
+          ${ph?`<div style="font-size:13px;font-weight:800;color:${deltaColor};animation:rise .3s both">${deltaText}</div>`:''}
+        </div>
+        ${ph?`<div style="padding:4px 10px;border-radius:999px;background:${MINT};border:2px solid ${INK};font-weight:800;font-size:14px;animation:pop .4s both">+${cur[p.id]-(prevT?prevT[p.id]:0)}</div>`:''}
+        <div style="flex:0 0 auto;min-width:72px;text-align:right;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:24px">${total} pts</div>
+      </div>`;
+    }).join('');
+    const dots = Array.from({length:cfg.rounds},(_,i)=>`<div style="width:${i===s.g.round?'36px':'14px'};height:10px;border-radius:999px;background:${i<=s.g.round?INK:'#fff'};border:2px solid ${INK};transition:width .3s"></div>`).join('');
+    const isLast = s.g.round+1 >= cfg.rounds;
+    const bottom = this.isHost
+      ? `<button class="btn-primary" data-action="nextRound">${isLast?'VER RESULTADO FINAL':'SIGUIENTE RONDA'}</button>`
+      : `<div style="height:62px;border-radius:18px;border:2px solid ${INK};background:#fff;display:flex;align-items:center;justify-content:center;gap:10px;font-weight:800;font-size:17px">${esc(this.playerById(s.hostId)?.name||'El anfitrión')} va a continuar<span style="display:flex;gap:3px"><span style="animation:blink 1.2s infinite">•</span><span style="animation:blink 1.2s .2s infinite">•</span><span style="animation:blink 1.2s .4s infinite">•</span></span></div>`;
+    return `<div class="screen">
+      <div style="display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center">
+        <div class="heading" style="font-size:clamp(36px,10vw,52px);letter-spacing:-.02em;line-height:1">CLASIFICACIÓN</div>
+        <div style="font-size:16px;font-weight:700;color:var(--muted)">Después de la ronda ${s.g.round+1} de ${cfg.rounds}</div>
+      </div>
+      <div style="display:flex;gap:6px;justify-content:center">${dots}</div>
+      <div style="position:relative;height:${pl.length*104}px">${rows}</div>
+      <div class="sticky-bottom">${bottom}</div>
+    </div>`;
+  }
+  viewImpFinal(){
+    const s = this.state, cfg = s.gameConfig, pl = this.players(), byId = {}; pl.forEach(p=>byId[p.id]=p);
+    const tot = this.impTotals(cfg.rounds-1);
+    const nr = this.rankOf(tot);
+    const w = byId[nr[0]];
+    const winnerTitle = w.id===this.myId ? '¡GANASTE, '+w.name.toUpperCase()+'!' : w.name.toUpperCase()+' GANÓ';
+    const pod = [1,0,2].filter(i=>nr[i]);
+    const H=['170px','124px','92px'], PBG=[YEL,'#E4DEF5','#F6BE9E'];
+    const podium = pod.map((i)=>{
+      const p = byId[nr[i]];
+      return `<div style="flex:0 1 130px;min-width:0;display:flex;flex-direction:column;align-items:center;gap:8px;animation:rise .6s both;animation-delay:${(0.2+(2-i)*0.15).toFixed(2)}s">
+        <div style="width:${i===0?72:56}px;height:${i===0?72:56}px;flex:0 0 auto">${avatarSVG(p.avatar, i===0?72:56)}</div>
+        <div style="font-weight:800;font-size:16px;text-align:center">${esc(p.name)}</div>
+        <div style="width:100%;height:${H[i]};border-radius:18px 18px 0 0;background:${PBG[i]};border:2.5px solid ${INK};border-bottom:0;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding-top:10px;gap:2px">
+          <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:40px;line-height:1">${i+1}</div>
+          <div style="font-weight:800;font-size:14px">${tot[p.id]} pts</div>
+        </div>
+      </div>`;
+    }).join('');
+    const finalRows = nr.map((id,i)=>{
+      const label = id===this.myId ? byId[id].name+' (vos)' : byId[id].name;
+      return `<div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:${i<nr.length-1?'2px solid var(--panel-line)':'0'}">
+        <div style="width:28px;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:20px">${i+1}</div>
+        <div style="width:38px;height:38px;flex:0 0 auto">${avatarSVG(byId[id].avatar,38)}</div>
+        <div style="flex:1;min-width:0;font-weight:800;font-size:17px">${esc(label)}</div>
+        <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:20px">${tot[id]} pts</div>
+      </div>`;
+    }).join('');
+    const stats = this.impFinalStats().map((x,i)=>({...x, delay:(0.5+i*0.1)+'s'}));
+    const statsHtml = stats.map(x=>`<div style="background:${x.bg};color:${x.dark?'var(--cream)':INK};border:2px solid ${INK};border-radius:22px;box-shadow:0 4px 0 ${INK};padding:16px;display:flex;flex-direction:column;gap:6px;animation:rise .5s both;animation-delay:${x.delay}">
+      <div style="font-size:12px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;opacity:${x.dark?0.8:1}">${esc(x.label)}</div>
+      <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:26px;line-height:1.05;overflow-wrap:anywhere">${esc(x.value)}</div>
+      <div style="font-size:14px;font-weight:700">${esc(x.sub)}</div>
+    </div>`).join('');
+    const confettiHtml = this.confetti.map(c=>`<div style="position:absolute;top:-20px;left:${c.left};width:${c.w};height:${c.h};border-radius:3px;background:${c.color};border:1.5px solid ${INK};animation:fall ${c.dur} linear ${c.delay} infinite"></div>`).join('');
+    const bottom = this.isHost
+      ? `<button class="btn-primary" style="flex:1;min-width:0;height:auto;min-height:56px;padding:8px 6px;font-size:14px" data-action="playAgain">JUGAR DE NUEVO</button><button class="btn-secondary" style="flex:1;min-width:0;height:auto;min-height:56px;padding:8px 6px;font-size:14px" data-action="backToPortal">ELEGIR OTRO JUEGO</button>`
+      : `<div style="height:54px;border-radius:16px;border:2px solid ${INK};background:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;color:var(--muted)">Esperando a ${esc(this.playerById(s.hostId)?.name||'el anfitrión')}…</div>`;
+    return `<div style="position:relative;min-height:100vh;overflow:hidden">
+      <div style="position:fixed;inset:0;pointer-events:none;z-index:1;overflow:hidden">${confettiHtml}</div>
+      <div style="position:relative;z-index:2;max-width:1080px;margin:0 auto;padding:28px 20px 0;display:flex;flex-direction:column;gap:28px">
+        <div style="display:flex;flex-direction:column;align-items:center;gap:8px;text-align:center">
+          <div style="padding:8px 16px;border-radius:999px;background:${INK};color:var(--cream);font-size:14px;font-weight:800;letter-spacing:.12em">¡PARTIDA TERMINADA!</div>
+          <div class="heading" style="font-size:clamp(40px,12vw,84px);line-height:.95;letter-spacing:-.03em;animation:pop .7s cubic-bezier(.3,1.6,.5,1) both">${esc(winnerTitle)}</div>
+          <div class="heading" style="font-size:24px">${tot[w.id]} puntos</div>
+        </div>
+        <div class="final-layout">
+          <div class="final-ranking">
+            <div style="display:flex;align-items:flex-end;justify-content:center;gap:10px">${podium}</div>
+            <div style="width:100%;background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:8px 18px">${finalRows}</div>
+          </div>
+          <div class="final-stats">${statsHtml}</div>
+        </div>
+        <div class="sticky-bottom">
+          <div style="max-width:560px;margin:0 auto;padding:0 14px;display:flex;flex-direction:row;align-items:center;gap:12px">${bottom}</div>
+        </div>
+      </div>
+    </div>`;
   }
 }
 

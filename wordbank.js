@@ -99,3 +99,22 @@ export function pickLetter(recent, hard){
   const source = fresh.length ? fresh : pool;
   return source[Math.floor(Math.random()*source.length)];
 }
+
+/* ================= IMPOSTOR ================= */
+// Pairs of related-but-distinct words: the group gets the first, the
+// impostor (in "clásico" mode) gets the second — close enough that the
+// impostor can bluff a plausible clue, different enough that a sharp
+// group can catch an inconsistency. Add more pairs here any time; nothing
+// else needs to change.
+export const IMPOSTOR_PAIRS = [
+  ['Playa','Piscina'], ['Perro','Gato'], ['Pizza','Hamburguesa'], ['Cine','Teatro'],
+  ['Verano','Invierno'], ['Café','Té'], ['Avión','Tren'], ['Fútbol','Básquet'],
+  ['Escuela','Universidad'], ['Mar','Río'], ['Hotel','Casa'], ['Restaurante','Bar'],
+  ['Cumpleaños','Casamiento'], ['Supermercado','Shopping'], ['Boliche','Fiesta'],
+];
+export function pickImpostorPair(used){
+  const usedSet = new Set((used||[]).map(p=>p[0]+'|'+p[1]));
+  const fresh = IMPOSTOR_PAIRS.filter(p=>!usedSet.has(p[0]+'|'+p[1]));
+  const pool = fresh.length ? fresh : IMPOSTOR_PAIRS;
+  return pool[Math.floor(Math.random()*pool.length)];
+}
