@@ -1876,21 +1876,27 @@ class Game {
   // picker, so "pick a game" always looks the same everywhere in the app.
   gameCardHtml(g, actionName, delay){
     const est = gameEstimateMinutes(g.id);
-    return `<button class="press-card" data-action="${actionName}" data-game="${g.id}" style="position:relative;display:flex;flex-direction:column;gap:12px;padding:20px;border-radius:24px;background:#fff;border:2.5px solid ${INK};text-align:left;animation:rise .5s both;animation-delay:${delay||'0s'};flex:0 1 240px;max-width:250px">
-      ${g.isNew?`<div style="position:absolute;top:16px;right:16px;padding:5px 12px;border-radius:999px;background:${MINT};border:2px solid ${INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:11px;letter-spacing:.06em">NUEVO</div>`:''}
-      <div style="display:flex;gap:6px">
-        <div style="width:48px;height:58px;border-radius:14px;background:${g.colors[0]};border:2.5px solid ${INK};box-shadow:0 3px 0 ${INK};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:26px;transform:rotate(-4deg)">${g.letters[0]}</div>
-        <div style="width:48px;height:58px;border-radius:14px;background:${g.colors[1]};border:2.5px solid ${INK};box-shadow:0 3px 0 ${INK};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:26px;transform:rotate(4deg)">${g.letters[1]}</div>
-      </div>
-      <div style="display:flex;flex-direction:column;gap:4px">
-        <div class="heading" style="font-size:24px">${esc(g.name)}</div>
-        <div style="font-size:14px;font-weight:600;color:var(--muted);line-height:1.35">${esc(g.tagline)}</div>
-      </div>
-      <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:2px">
-        <div style="display:flex;align-items:center;gap:5px;padding:6px 12px;border-radius:999px;background:var(--cream);border:2px solid var(--line);font-size:13px;font-weight:700">${this.iconPersonSmall(13)} ${g.min}–${g.max} jugadores</div>
-        <div style="display:flex;align-items:center;gap:5px;padding:6px 12px;border-radius:999px;background:var(--cream);border:2px solid var(--line);font-size:13px;font-weight:700">${this.iconClock(14)} ≈ ${est} min</div>
-      </div>
-    </button>`;
+    // The entrance animation lives on this wrapper (not the button) because
+    // a CSS animation with fill-mode:both keeps "owning" any property it
+    // touches even after it finishes — if it were on the button itself, it
+    // would silently block :hover from ever moving that same button again.
+    return `<div style="animation:rise .5s both;animation-delay:${delay||'0s'};flex:0 1 240px;max-width:250px">
+      <button class="press-card" data-action="${actionName}" data-game="${g.id}" style="position:relative;display:flex;flex-direction:column;gap:12px;padding:20px;border-radius:24px;background:#fff;border:2.5px solid ${INK};text-align:left;width:100%">
+        ${g.isNew?`<div style="position:absolute;top:16px;right:16px;padding:5px 12px;border-radius:999px;background:${MINT};border:2px solid ${INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:11px;letter-spacing:.06em">NUEVO</div>`:''}
+        <div style="display:flex;gap:6px">
+          <div style="width:48px;height:58px;border-radius:14px;background:${g.colors[0]};border:2.5px solid ${INK};box-shadow:0 3px 0 ${INK};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:26px;transform:rotate(-4deg)">${g.letters[0]}</div>
+          <div style="width:48px;height:58px;border-radius:14px;background:${g.colors[1]};border:2.5px solid ${INK};box-shadow:0 3px 0 ${INK};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:26px;transform:rotate(4deg)">${g.letters[1]}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:4px">
+          <div class="heading" style="font-size:24px">${esc(g.name)}</div>
+          <div style="font-size:14px;font-weight:600;color:var(--muted);line-height:1.35">${esc(g.tagline)}</div>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:2px">
+          <div style="display:flex;align-items:center;gap:5px;padding:6px 12px;border-radius:999px;background:var(--cream);border:2px solid var(--line);font-size:13px;font-weight:700">${this.iconPersonSmall(13)} ${g.min}–${g.max} jugadores</div>
+          <div style="display:flex;align-items:center;gap:5px;padding:6px 12px;border-radius:999px;background:var(--cream);border:2px solid var(--line);font-size:13px;font-weight:700">${this.iconClock(14)} ≈ ${est} min</div>
+        </div>
+      </button>
+    </div>`;
   }
   viewGamePicker(){
     const cards = GAMES.map((g,i)=>this.gameCardHtml(g, 'pickGame', (i*0.06)+'s')).join('');
