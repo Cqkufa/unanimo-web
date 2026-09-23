@@ -2188,10 +2188,12 @@ class Game {
           <div class="heading" style="font-size:clamp(40px,12vw,84px);line-height:.95;letter-spacing:-.03em;animation:pop .7s cubic-bezier(.3,1.6,.5,1) both">${esc(winnerTitle)}</div>
           <div class="heading" style="font-size:24px">${tot[w.id]} puntos</div>
         </div>
-        <div style="display:flex;align-items:flex-end;justify-content:center;gap:10px">${podium}</div>
-        <div style="display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:32px;margin-top:12px">
-          <div style="flex:0 1 420px;width:100%;max-width:420px;background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:8px 18px">${finalRows}</div>
-          <div style="flex:0 1 280px;width:100%;max-width:280px;display:flex;flex-direction:column;gap:12px">${statsHtml}</div>
+        <div class="final-layout">
+          <div class="final-ranking">
+            <div style="display:flex;align-items:flex-end;justify-content:center;gap:10px">${podium}</div>
+            <div style="width:100%;background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:8px 18px">${finalRows}</div>
+          </div>
+          <div class="final-stats">${statsHtml}</div>
         </div>
         <div class="sticky-bottom">
           <div style="max-width:560px;margin:0 auto;padding:0 14px;display:flex;flex-direction:row;align-items:center;gap:12px">${bottom}</div>
@@ -2471,10 +2473,12 @@ class Game {
           <div class="heading" style="font-size:clamp(40px,12vw,84px);line-height:.95;letter-spacing:-.03em;animation:pop .7s cubic-bezier(.3,1.6,.5,1) both">${esc(winnerTitle)}</div>
           <div class="heading" style="font-size:24px">${tot[w.id]} puntos</div>
         </div>
-        <div style="display:flex;align-items:flex-end;justify-content:center;gap:10px">${podium}</div>
-        <div style="display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:32px;margin-top:12px">
-          <div style="flex:0 1 420px;width:100%;max-width:420px;background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:8px 18px">${finalRows}</div>
-          <div style="flex:0 1 280px;width:100%;max-width:280px;display:flex;flex-direction:column;gap:12px">${statsHtml}</div>
+        <div class="final-layout">
+          <div class="final-ranking">
+            <div style="display:flex;align-items:flex-end;justify-content:center;gap:10px">${podium}</div>
+            <div style="width:100%;background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:8px 18px">${finalRows}</div>
+          </div>
+          <div class="final-stats">${statsHtml}</div>
         </div>
         <div class="sticky-bottom">
           <div style="max-width:560px;margin:0 auto;padding:0 14px;display:flex;flex-direction:row;align-items:center;gap:12px">${bottom}</div>
@@ -2816,10 +2820,12 @@ class Game {
           <div class="heading" style="font-size:clamp(40px,12vw,84px);line-height:.95;letter-spacing:-.03em;animation:pop .7s cubic-bezier(.3,1.6,.5,1) both">${esc(winnerTitle)}</div>
           <div class="heading" style="font-size:24px">${tot[w.id]} puntos</div>
         </div>
-        <div style="display:flex;align-items:flex-end;justify-content:center;gap:10px">${podium}</div>
-        <div style="display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:32px;margin-top:12px">
-          <div style="flex:0 1 420px;width:100%;max-width:420px;background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:8px 18px">${finalRows}</div>
-          <div style="flex:0 1 280px;width:100%;max-width:280px;display:flex;flex-direction:column;gap:12px">${statsHtml}</div>
+        <div class="final-layout">
+          <div class="final-ranking">
+            <div style="display:flex;align-items:flex-end;justify-content:center;gap:10px">${podium}</div>
+            <div style="width:100%;background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:8px 18px">${finalRows}</div>
+          </div>
+          <div class="final-stats">${statsHtml}</div>
         </div>
         <div class="sticky-bottom">
           <div style="max-width:560px;margin:0 auto;padding:0 14px;display:flex;flex-direction:row;align-items:center;gap:12px">${bottom}</div>
