@@ -202,7 +202,8 @@ class Game {
   toggleSound(){
     this.soundOn = !this.soundOn;
     try{ localStorage.setItem('unanimo:sound', this.soundOn?'on':'off'); }catch(e){}
-    if(this.soundOn){ ensureAudio(); if(this.local.screen==='lobby') this.startLobbyMusic(); }
+    const musicScreen = this.local.screen==='home' || this.local.screen==='setup' || this.local.screen==='lobby';
+    if(this.soundOn){ ensureAudio(); if(musicScreen) this.startLobbyMusic(); }
     else this.stopLobbyMusic();
     this.renderHud();
   }
@@ -2602,7 +2603,7 @@ class Game {
     const m = mp ? mp.items.filter(x=>x.pts>0).length : 0;
     const summary = 'Coincidiste en '+m+' de '+(mp?mp.items.length:0)+' palabras';
     return `<div style="text-align:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:19px;animation:rise .4s both">${esc(summary)}</div>
-      <button class="btn-primary" data-action="goScore" style="animation:pop .4s both">VER PUNTOS</button>`;
+      <button class="btn-primary" data-action="goScore">VER PUNTOS</button>`;
   }
   // Called on every reveal tick instead of a full renderScreen() — otherwise
   // every already-shown card would replay its entrance animation each time
