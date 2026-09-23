@@ -1764,16 +1764,18 @@ class Game {
   }
 
   viewSetup(){
-    return `<div class="screen screen-narrow">
+    return `<div class="screen screen-narrow" style="padding-top:28px;padding-bottom:28px">
       <div class="top-bar"><button class="icon-btn" data-action="goHome" aria-label="Volver">${this.iconBack()}</button><div class="heading" style="font-size:28px">Armá tu sala</div></div>
-      <div style="display:flex;flex-direction:column;gap:8px">
-        <div style="font-size:14px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)">Tu nombre</div>
-        <input data-role="cfg-name" value="${esc(this.local.cfgName)}" placeholder="¿Cómo te llamás?" style="height:60px;border-radius:16px;border:2px solid ${INK};background:#fff;padding:0 18px;font-family:'Figtree',sans-serif;font-weight:700;font-size:20px;color:${INK};outline:none">
-      </div>
-      <div style="background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:16px 18px">${this.avatarPicker()}</div>
-      <div class="sticky-bottom">
-        <div style="text-align:center;font-size:14px;font-weight:700;color:var(--muted)">Elegís a qué jugar una vez adentro, con todos.</div>
-        <button class="btn-primary" data-action="createGame">CREAR SALA</button>
+      <div style="flex:1;display:flex;flex-direction:column;justify-content:center;gap:22px;padding:16px 0">
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <div style="font-size:14px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)">Tu nombre</div>
+          <input data-role="cfg-name" value="${esc(this.local.cfgName)}" placeholder="¿Cómo te llamás?" style="height:60px;border-radius:16px;border:2px solid ${INK};background:#fff;padding:0 18px;font-family:'Figtree',sans-serif;font-weight:700;font-size:20px;color:${INK};outline:none">
+        </div>
+        <div style="background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:16px 18px">${this.avatarPicker()}</div>
+        <div style="display:flex;flex-direction:column;gap:14px">
+          <div style="text-align:center;font-size:14px;font-weight:700;color:var(--muted)">Elegís a qué jugar una vez adentro, con todos.</div>
+          <button class="btn-primary" data-action="createGame">CREAR SALA</button>
+        </div>
       </div>
     </div>`;
   }
@@ -1865,7 +1867,7 @@ class Game {
   // picker, so "pick a game" always looks the same everywhere in the app.
   gameCardHtml(g, actionName, delay){
     const est = gameEstimateMinutes(g.id);
-    return `<button data-action="${actionName}" data-game="${g.id}" style="position:relative;display:flex;flex-direction:column;gap:12px;padding:20px;border-radius:24px;background:#fff;border:2.5px solid ${INK};box-shadow:0 5px 0 ${INK};text-align:left;transition:transform .08s,box-shadow .08s;animation:rise .5s both;animation-delay:${delay||'0s'};flex:0 1 240px;max-width:250px" style-active="transform:translateY(4px);box-shadow:0 1px 0 ${INK}">
+    return `<button class="press-card" data-action="${actionName}" data-game="${g.id}" style="position:relative;display:flex;flex-direction:column;gap:12px;padding:20px;border-radius:24px;background:#fff;border:2.5px solid ${INK};box-shadow:0 5px 0 ${INK};text-align:left;animation:rise .5s both;animation-delay:${delay||'0s'};flex:0 1 240px;max-width:250px">
       ${g.isNew?`<div style="position:absolute;top:16px;right:16px;padding:5px 12px;border-radius:999px;background:${MINT};border:2px solid ${INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:11px;letter-spacing:.06em">NUEVO</div>`:''}
       <div style="display:flex;gap:6px">
         <div style="width:48px;height:58px;border-radius:14px;background:${g.colors[0]};border:2.5px solid ${INK};box-shadow:0 3px 0 ${INK};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:26px;transform:rotate(-4deg)">${g.letters[0]}</div>
@@ -2231,7 +2233,7 @@ class Game {
     if(!opts){
       return `<div style="min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;text-align:center;padding:20px"><div class="spinner"></div><div style="font-weight:700;color:var(--muted)">Preparando tus opciones…</div></div>`;
     }
-    const cards = opts.map((o,i)=>`<button data-action="dChooseOption" data-i="${i}" style="display:flex;flex-direction:column;align-items:center;gap:8px;padding:20px 14px;border-radius:22px;background:#fff;border:2.5px solid ${INK};box-shadow:0 5px 0 ${INK};transition:transform .08s,box-shadow .08s" style-active="transform:translateY(4px);box-shadow:0 1px 0 ${INK}">
+    const cards = opts.map((o,i)=>`<button class="press-card" data-action="dChooseOption" data-i="${i}" style="display:flex;flex-direction:column;align-items:center;gap:8px;padding:20px 14px;border-radius:22px;background:#fff;border:2.5px solid ${INK};box-shadow:0 5px 0 ${INK}">
       <div style="font-size:40px">${o.emoji||this.iconPalette(34)}</div>
       <div class="heading" style="font-size:20px;text-align:center">${esc(o.word.toUpperCase())}</div>
       <div style="font-size:12px;font-weight:700;color:var(--muted)">${esc(o.category)}</div>
