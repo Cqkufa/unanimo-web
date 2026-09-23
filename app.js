@@ -2178,7 +2178,7 @@ class Game {
     </div>`).join('');
     const confettiHtml = this.confetti.map(c=>`<div style="position:absolute;top:-20px;left:${c.left};width:${c.w};height:${c.h};border-radius:3px;background:${c.color};border:1.5px solid ${INK};animation:fall ${c.dur} linear ${c.delay} infinite"></div>`).join('');
     const bottom = this.isHost
-      ? `<button class="btn-primary" style="flex:1;min-width:0;height:60px;padding:8px 4px;font-size:clamp(12px,2.2vw,16px);white-space:nowrap" data-action="playAgain">JUGAR DE NUEVO</button><button class="btn-secondary" style="flex:1;min-width:0;height:60px;padding:8px 4px;font-size:clamp(12px,2.2vw,16px);white-space:nowrap" data-action="backToPortal">ELEGIR OTRO JUEGO</button>`
+      ? `<button class="btn-primary" style="flex:1;min-width:0;height:auto;min-height:56px;padding:8px 6px;font-size:14px" data-action="playAgain">JUGAR DE NUEVO</button><button class="btn-secondary" style="flex:1;min-width:0;height:auto;min-height:56px;padding:8px 6px;font-size:14px" data-action="backToPortal">ELEGIR OTRO JUEGO</button>`
       : `<div style="height:54px;border-radius:16px;border:2px solid ${INK};background:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;color:var(--muted)">Esperando a ${esc(this.playerById(s.hostId)?.name||'el anfitrión')}…</div>`;
     return `<div style="position:relative;min-height:100vh;overflow:hidden">
       <div style="position:fixed;inset:0;pointer-events:none;z-index:1;overflow:hidden">${confettiHtml}</div>
@@ -2463,7 +2463,7 @@ class Game {
     </div>`).join('');
     const confettiHtml = this.confetti.map(c=>`<div style="position:absolute;top:-20px;left:${c.left};width:${c.w};height:${c.h};border-radius:3px;background:${c.color};border:1.5px solid ${INK};animation:fall ${c.dur} linear ${c.delay} infinite"></div>`).join('');
     const bottom = this.isHost
-      ? `<button class="btn-primary" style="flex:1;min-width:0;height:60px;padding:8px 4px;font-size:clamp(12px,2.2vw,16px);white-space:nowrap" data-action="playAgain">JUGAR DE NUEVO</button><button class="btn-secondary" style="flex:1;min-width:0;height:60px;padding:8px 4px;font-size:clamp(12px,2.2vw,16px);white-space:nowrap" data-action="backToPortal">ELEGIR OTRO JUEGO</button>`
+      ? `<button class="btn-primary" style="flex:1;min-width:0;height:auto;min-height:56px;padding:8px 6px;font-size:14px" data-action="playAgain">JUGAR DE NUEVO</button><button class="btn-secondary" style="flex:1;min-width:0;height:auto;min-height:56px;padding:8px 6px;font-size:14px" data-action="backToPortal">ELEGIR OTRO JUEGO</button>`
       : `<div style="height:54px;border-radius:16px;border:2px solid ${INK};background:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;color:var(--muted)">Esperando a ${esc(this.playerById(s.hostId)?.name||'el anfitrión')}…</div>`;
     return `<div style="position:relative;min-height:100vh;overflow:hidden">
       <div style="position:fixed;inset:0;pointer-events:none;z-index:1;overflow:hidden">${confettiHtml}</div>
@@ -2810,7 +2810,7 @@ class Game {
     </div>`).join('');
     const confettiHtml = this.confetti.map(c=>`<div style="position:absolute;top:-20px;left:${c.left};width:${c.w};height:${c.h};border-radius:3px;background:${c.color};border:1.5px solid ${INK};animation:fall ${c.dur} linear ${c.delay} infinite"></div>`).join('');
     const bottom = this.isHost
-      ? `<button class="btn-primary" style="flex:1;min-width:0;height:60px;padding:8px 4px;font-size:clamp(12px,2.2vw,16px);white-space:nowrap" data-action="playAgain">JUGAR DE NUEVO</button><button class="btn-secondary" style="flex:1;min-width:0;height:60px;padding:8px 4px;font-size:clamp(12px,2.2vw,16px);white-space:nowrap" data-action="backToPortal">ELEGIR OTRO JUEGO</button>`
+      ? `<button class="btn-primary" style="flex:1;min-width:0;height:auto;min-height:56px;padding:8px 6px;font-size:14px" data-action="playAgain">JUGAR DE NUEVO</button><button class="btn-secondary" style="flex:1;min-width:0;height:auto;min-height:56px;padding:8px 6px;font-size:14px" data-action="backToPortal">ELEGIR OTRO JUEGO</button>`
       : `<div style="height:54px;border-radius:16px;border:2px solid ${INK};background:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;color:var(--muted)">Esperando a ${esc(this.playerById(this.state.hostId)?.name||'el anfitrión')}…</div>`;
     return `<div style="position:relative;min-height:100vh;overflow:hidden">
       <div style="position:fixed;inset:0;pointer-events:none;z-index:1;overflow:hidden">${confettiHtml}</div>
