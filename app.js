@@ -310,7 +310,8 @@ class Game {
       phase:'lobby', stage:0, rev:0, updatedAt:Date.now()
     };
     this.local.appliedStage = 0;
-    this.local.hostFlow = null;
+    this.local.hostFlow = this.local.pendingGameId || null; // picked a game card from home — skip straight to its config
+    this.local.pendingGameId = null;
     this.local.screen = 'lobby';
     this.saveSession();
     this.renderScreen();
@@ -1325,6 +1326,7 @@ class Game {
     return {
       goHome: ()=>this.goHome(),
       goSetup: ()=>{ this.local.screen='setup'; this.renderScreen(); },
+      pickGameFromHome: (t)=>{ this.local.pendingGameId = t.dataset.game; this.local.screen='setup'; this.renderScreen(); },
       openHow: ()=>{ this.local.modal='how'; this.renderModals(); },
       closeModal: ()=>{ this.local.modal=null; this.local.showJoinName=false; this.renderModals(); },
       stop: (t,e)=>e.stopPropagation(),
@@ -1439,7 +1441,7 @@ class Game {
     this.renderModals();
     this.renderHud();
 
-    if(sc==='lobby') this.startLobbyMusic(); else this.stopLobbyMusic();
+    if(sc==='home' || sc==='setup' || sc==='lobby') this.startLobbyMusic(); else this.stopLobbyMusic();
 
     if(sc==='round'){
       this.later(()=>{ const el=this.root.querySelector('[data-role="word-input"][data-index="0"]'); if(el) el.focus({preventScroll:true}); }, 50);
@@ -1542,40 +1544,45 @@ class Game {
   }
 
   viewHome(){
-    const stickers = [
-      {t:1,l:'7%',pos:'left',bg:CORAL,rot:-8,txt:'Mar'},
-      {t:2,l:'7%',pos:'right',bg:'#fff',rot:6,txt:'Sol'},
-      {t:3,b:'9%',pos:'left',bg:CORAL,rot:5,txt:'Mar'},
-      {t:4,b:'13%',pos:'right',bg:'#fff',rot:-5,txt:'Helado'},
-    ];
-    return `<div style="position:relative;min-height:100vh;overflow:hidden;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px 20px">
-      <div style="position:absolute;inset:0;pointer-events:none">
-        <div style="position:absolute;top:7%;left:6%;animation:float 5s ease-in-out infinite"><div style="padding:9px 16px;border-radius:18px 18px 18px 4px;background:${CORAL};border:2px solid ${INK};font-weight:800;font-size:16px;transform:rotate(-8deg)">Mar</div></div>
-        <div style="position:absolute;top:11%;right:7%;animation:float 6s ease-in-out .8s infinite"><div style="padding:9px 16px;border-radius:18px 18px 4px 18px;background:#fff;border:2px solid ${INK};font-weight:800;font-size:16px;transform:rotate(6deg)">Sol</div></div>
-        <div style="position:absolute;bottom:9%;left:9%;animation:float 5.5s ease-in-out .4s infinite"><div style="padding:9px 16px;border-radius:18px 18px 18px 4px;background:${CORAL};border:2px solid ${INK};font-weight:800;font-size:16px;transform:rotate(5deg)">Mar</div></div>
-        <div style="position:absolute;bottom:13%;right:6%;animation:float 6.5s ease-in-out 1.2s infinite"><div style="padding:9px 16px;border-radius:18px 18px 4px 18px;background:#fff;border:2px solid ${INK};font-weight:800;font-size:16px;transform:rotate(-5deg)">Helado</div></div>
+    const letters = ['R','O','N','D','A'];
+    const colors = [CORAL,VIOLET,YEL,MINT,BLUE];
+    const rots = [-6,4,-4,5,-3];
+    const gameCards = GAMES.map((g,i)=>`
+      <button data-action="pickGameFromHome" data-game="${g.id}" style="display:flex;align-items:center;gap:14px;width:100%;padding:14px 16px;border-radius:22px;background:#fff;border:2.5px solid ${INK};box-shadow:0 4px 0 ${INK};text-align:left;transition:transform .08s,box-shadow .08s;animation:rise .5s both;animation-delay:${(0.15+i*0.08).toFixed(2)}s" style-active="transform:translateY(3px);box-shadow:0 1px 0 ${INK}">
+        <div style="display:flex;gap:4px;flex:0 0 auto">
+          <div style="width:38px;height:46px;border-radius:12px;background:${g.colors[0]};border:2px solid ${INK};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:20px;transform:rotate(-4deg)">${g.letters[0]}</div>
+          <div style="width:38px;height:46px;border-radius:12px;background:${g.colors[1]};border:2px solid ${INK};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:20px;transform:rotate(4deg)">${g.letters[1]}</div>
+        </div>
+        <div style="flex:1;min-width:0"><div class="heading" style="font-size:19px">${esc(g.name)}</div><div style="font-size:13px;font-weight:600;color:var(--muted)">${esc(g.tagline)}</div></div>
+        <div style="flex:0 0 auto;font-size:20px">▶</div>
+      </button>`).join('');
+    return `<div class="screen screen-narrow" style="position:relative;overflow:hidden">
+      <div style="position:absolute;inset:0;pointer-events:none;z-index:0">
+        <div style="position:absolute;top:2%;left:2%;animation:float 5s ease-in-out infinite"><div style="padding:9px 16px;border-radius:18px 18px 18px 4px;background:${CORAL};border:2px solid ${INK};font-weight:800;font-size:16px;transform:rotate(-8deg)">Che</div></div>
+        <div style="position:absolute;top:4%;right:2%;animation:float 6s ease-in-out .8s infinite"><div style="padding:9px 16px;border-radius:18px 18px 4px 18px;background:#fff;border:2px solid ${INK};font-weight:800;font-size:16px;transform:rotate(6deg)">Dale</div></div>
       </div>
-      <div style="position:relative;width:100%;max-width:460px;display:flex;flex-direction:column;align-items:center;gap:32px">
-        <div style="display:flex;flex-direction:column;align-items:center;gap:18px">
-          <div style="display:flex;gap:clamp(4px,1.2vw,8px)">
-            ${['U','N','A','N','I','M','O'].map((ch,i)=>`<div style="animation:drop .6s cubic-bezier(.3,1.5,.5,1) ${(i*0.06).toFixed(2)}s both"><div style="width:clamp(42px,11.5vw,72px);height:clamp(52px,14vw,86px);border-radius:14px;background:${[CORAL,VIOLET,YEL,VIOLET,MINT,BLUE,PINK][i]};border:2.5px solid ${INK};box-shadow:0 5px 0 ${INK};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:clamp(28px,8vw,52px);transform:rotate(${[-6,4,-3,5,-4,3,-5][i]}deg)">${ch}</div></div>`).join('')}
-          </div>
-          <div class="heading" style="font-size:clamp(22px,6vw,28px);animation:rise .5s .5s both">Party games para jugar con amigos.</div>
+      <div style="position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;gap:14px;padding-top:28px">
+        <div style="display:flex;gap:clamp(4px,1.2vw,8px)">
+          ${letters.map((ch,i)=>`<div style="animation:drop .6s cubic-bezier(.3,1.5,.5,1) ${(i*0.06).toFixed(2)}s both"><div style="width:clamp(46px,13vw,76px);height:clamp(56px,15.5vw,90px);border-radius:14px;background:${colors[i]};border:2.5px solid ${INK};box-shadow:0 5px 0 ${INK};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:clamp(30px,9vw,54px);transform:rotate(${rots[i]}deg)">${ch}</div></div>`).join('')}
         </div>
-        <div style="width:100%;display:flex;flex-direction:column;gap:14px;animation:rise .5s .65s both">
-          <button class="btn-primary" data-action="goSetup">CREAR SALA</button>
-          <div style="display:flex;flex-direction:column;gap:8px;padding:14px;border-radius:20px;background:#fff;border:2px solid var(--line)">
-            <div style="font-size:14px;font-weight:700;color:var(--muted);padding-left:4px">¿Te pasaron un código?</div>
-            <div style="display:flex;gap:10px">
-              <input data-role="join-code" value="${esc(this.local.joinCode)}" placeholder="A7K9P" autocomplete="off"
-                style="flex:1;min-width:0;height:56px;border-radius:16px;border:2px solid ${INK};background:#FFFDF8;padding:0 16px;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:22px;letter-spacing:.28em;color:${INK};outline:none">
-              <button data-action="joinGame" style="flex:0 0 auto;height:56px;padding:0 20px;border-radius:16px;border:2px solid ${INK};background:${INK};color:var(--cream);font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:17px;letter-spacing:.04em">UNIRME</button>
-            </div>
-            ${this.local.joining?`<div style="display:flex;align-items:center;gap:8px;padding-top:4px"><div class="spinner"></div><span style="font-size:14px;font-weight:700;color:var(--muted)">Conectando…</span></div>`:''}
-            ${this.local.joinError?`<div style="font-size:13px;font-weight:700;color:#B3341A">${esc(this.local.joinError)}</div>`:''}
+        <div class="heading" style="font-size:clamp(20px,5.5vw,26px);text-align:center;animation:rise .5s .4s both">Party games para jugar con amigos.</div>
+      </div>
+      <div style="position:relative;z-index:1;display:flex;flex-direction:column;gap:10px;padding-top:22px">
+        <div style="font-size:13px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);padding:0 4px">Elegí un juego para arrancar</div>
+        ${gameCards}
+      </div>
+      <div style="position:relative;z-index:1;width:100%;display:flex;flex-direction:column;gap:14px;padding-top:22px;padding-bottom:24px">
+        <div style="display:flex;flex-direction:column;gap:8px;padding:14px;border-radius:20px;background:#fff;border:2px solid var(--line)">
+          <div style="font-size:14px;font-weight:700;color:var(--muted);padding-left:4px">¿Te pasaron un código?</div>
+          <div style="display:flex;gap:10px">
+            <input data-role="join-code" value="${esc(this.local.joinCode)}" placeholder="A7K9P" autocomplete="off"
+              style="flex:1;min-width:0;height:56px;border-radius:16px;border:2px solid ${INK};background:#FFFDF8;padding:0 16px;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:22px;letter-spacing:.28em;color:${INK};outline:none">
+            <button data-action="joinGame" style="flex:0 0 auto;height:56px;padding:0 20px;border-radius:16px;border:2px solid ${INK};background:${INK};color:var(--cream);font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:17px;letter-spacing:.04em">UNIRME</button>
           </div>
-          <button class="btn-secondary" data-action="openHow">CÓMO JUGAR</button>
+          ${this.local.joining?`<div style="display:flex;align-items:center;gap:8px;padding-top:4px"><div class="spinner"></div><span style="font-size:14px;font-weight:700;color:var(--muted)">Conectando…</span></div>`:''}
+          ${this.local.joinError?`<div style="font-size:13px;font-weight:700;color:#B3341A">${esc(this.local.joinError)}</div>`:''}
         </div>
+        <button class="btn-secondary" data-action="openHow">CÓMO JUGAR</button>
       </div>
     </div>`;
   }

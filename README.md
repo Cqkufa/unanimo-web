@@ -1,8 +1,8 @@
-# Unánimo
+# Ronda
 
 > Party games para jugar con amigos.
 
-Un portal de minijuegos multijugador para jugar en grupo, cada uno desde su propio celular. Creás una sala una sola vez, compartís el código de 5 letras, y desde ahí el anfitrión va eligiendo a qué jugar — sin volver a escribir el código entre partida y partida.
+Un portal de minijuegos multijugador para jugar en grupo, cada uno desde su propio celular. Desde la home elegís a qué jugar, armás tu sala (nombre + avatar) y compartís el código de 5 letras — el resto se une con ese código, y desde ahí el anfitrión puede cambiar de juego cuando quiera sin que nadie tenga que volver a escribir nada.
 
 **Tres juegos:**
 
