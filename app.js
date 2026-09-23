@@ -1867,7 +1867,7 @@ class Game {
   // picker, so "pick a game" always looks the same everywhere in the app.
   gameCardHtml(g, actionName, delay){
     const est = gameEstimateMinutes(g.id);
-    return `<button class="press-card" data-action="${actionName}" data-game="${g.id}" style="position:relative;display:flex;flex-direction:column;gap:12px;padding:20px;border-radius:24px;background:#fff;border:2.5px solid ${INK};box-shadow:0 5px 0 ${INK};text-align:left;animation:rise .5s both;animation-delay:${delay||'0s'};flex:0 1 240px;max-width:250px">
+    return `<button class="press-card" data-action="${actionName}" data-game="${g.id}" style="position:relative;display:flex;flex-direction:column;gap:12px;padding:20px;border-radius:24px;background:#fff;border:2.5px solid ${INK};text-align:left;animation:rise .5s both;animation-delay:${delay||'0s'};flex:0 1 240px;max-width:250px">
       ${g.isNew?`<div style="position:absolute;top:16px;right:16px;padding:5px 12px;border-radius:999px;background:${MINT};border:2px solid ${INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:11px;letter-spacing:.06em">NUEVO</div>`:''}
       <div style="display:flex;gap:6px">
         <div style="width:48px;height:58px;border-radius:14px;background:${g.colors[0]};border:2.5px solid ${INK};box-shadow:0 3px 0 ${INK};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:26px;transform:rotate(-4deg)">${g.letters[0]}</div>
@@ -1905,29 +1905,31 @@ class Game {
     const roundOpts = [1,2,3,4,5].map(n=>`<button data-action="setRounds" data-val="${n}" style="height:48px;border-radius:14px;border:2px solid ${INK};background:${cfg.rounds===n?INK:'#fff'};color:${cfg.rounds===n?'var(--cream)':INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:20px">${n}</button>`).join('');
     const timeOpts = [30,45,60,90].map(n=>`<button data-action="setTime" data-val="${n}" style="height:48px;border-radius:14px;border:2px solid ${INK};background:${cfg.time===n?INK:'#fff'};color:${cfg.time===n?'var(--cream)':INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:18px">${n}s</button>`).join('');
     const estimate = '≈ '+Math.max(1,Math.round(cfg.rounds*(cfg.time+35)/60))+' min de juego';
-    return `<div class="screen screen-narrow">
+    return `<div class="screen screen-narrow" style="padding-top:28px;padding-bottom:28px">
       <div class="top-bar"><button class="icon-btn" data-action="backToPicker" aria-label="Volver">${this.iconBack()}</button><div class="heading" style="font-size:28px">Unánimo</div></div>
-      <div style="background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:6px 18px;display:flex;flex-direction:column">
-        <div style="display:flex;flex-direction:column;gap:10px;padding:14px 0;border-bottom:2px solid var(--panel-line)">
-          <div style="font-weight:800;font-size:17px">Rondas</div>
-          <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px">${roundOpts}</div>
-        </div>
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 0;border-bottom:2px solid var(--panel-line)">
-          <div style="display:flex;flex-direction:column;gap:2px"><div style="font-weight:800;font-size:17px">Palabras por ronda</div><div style="font-size:14px;color:var(--muted)">Cuántas escribe cada uno</div></div>
-          <div style="display:flex;align-items:center;gap:10px">
-            <button data-action="decWords" aria-label="Menos" style="width:44px;height:44px;border-radius:14px;border:2px solid ${INK};background:var(--cream);font-size:24px;font-weight:800;color:${INK}">−</button>
-            <div style="width:36px;text-align:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:28px">${cfg.words}</div>
-            <button data-action="incWords" aria-label="Más" style="width:44px;height:44px;border-radius:14px;border:2px solid ${INK};background:var(--cream);font-size:24px;font-weight:800;color:${INK}">+</button>
+      <div style="flex:1;display:flex;flex-direction:column;justify-content:center;gap:22px;padding:16px 0">
+        <div style="background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:6px 18px;display:flex;flex-direction:column">
+          <div style="display:flex;flex-direction:column;gap:10px;padding:14px 0;border-bottom:2px solid var(--panel-line)">
+            <div style="font-weight:800;font-size:17px">Rondas</div>
+            <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px">${roundOpts}</div>
+          </div>
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 0;border-bottom:2px solid var(--panel-line)">
+            <div style="display:flex;flex-direction:column;gap:2px"><div style="font-weight:800;font-size:17px">Palabras por ronda</div><div style="font-size:14px;color:var(--muted)">Cuántas escribe cada uno</div></div>
+            <div style="display:flex;align-items:center;gap:10px">
+              <button data-action="decWords" aria-label="Menos" style="width:44px;height:44px;border-radius:14px;border:2px solid ${INK};background:var(--cream);font-size:24px;font-weight:800;color:${INK}">−</button>
+              <div style="width:36px;text-align:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:28px">${cfg.words}</div>
+              <button data-action="incWords" aria-label="Más" style="width:44px;height:44px;border-radius:14px;border:2px solid ${INK};background:var(--cream);font-size:24px;font-weight:800;color:${INK}">+</button>
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:10px;padding:14px 0">
+            <div style="font-weight:800;font-size:17px">Tiempo para responder</div>
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">${timeOpts}</div>
           </div>
         </div>
-        <div style="display:flex;flex-direction:column;gap:10px;padding:14px 0">
-          <div style="font-weight:800;font-size:17px">Tiempo para responder</div>
-          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">${timeOpts}</div>
+        <div style="display:flex;flex-direction:column;gap:14px">
+          <div style="text-align:center;font-size:14px;font-weight:700;color:var(--muted)">${estimate}</div>
+          <button class="btn-primary" data-action="confirmUnanimoConfig">SIGUIENTE</button>
         </div>
-      </div>
-      <div class="sticky-bottom">
-        <div style="text-align:center;font-size:14px;font-weight:700;color:var(--muted)">${estimate}</div>
-        <button class="btn-primary" data-action="confirmUnanimoConfig">SIGUIENTE</button>
       </div>
     </div>`;
   }
@@ -1942,29 +1944,31 @@ class Game {
       return `<button data-action="tfToggleCategory" data-cat="${c.id}" style="display:flex;align-items:center;gap:8px;padding:10px 14px;border-radius:14px;border:2px solid ${INK};background:${on?MINT:'#fff'};font-weight:800;font-size:14px">${this.tfCatIcon(c.id,16)} ${esc(c.label)}</button>`;
     }).join('');
     const estimate = '≈ '+Math.max(1,Math.round(cfg.rounds*(cfg.time+40)/60))+' min de juego';
-    return `<div class="screen screen-narrow">
+    return `<div class="screen screen-narrow" style="padding-top:28px;padding-bottom:28px">
       <div class="top-bar"><button class="icon-btn" data-action="backToPicker" aria-label="Volver">${this.iconBack()}</button><div class="heading" style="font-size:28px">Tutti Frutti</div></div>
-      <div style="background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:6px 18px;display:flex;flex-direction:column">
-        <div style="display:flex;flex-direction:column;gap:10px;padding:14px 0;border-bottom:2px solid var(--panel-line)">
-          <div style="font-weight:800;font-size:17px">Rondas</div>
-          <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:6px">${roundOpts}</div>
+      <div style="flex:1;display:flex;flex-direction:column;justify-content:center;gap:22px;padding:16px 0">
+        <div style="background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:6px 18px;display:flex;flex-direction:column">
+          <div style="display:flex;flex-direction:column;gap:10px;padding:14px 0;border-bottom:2px solid var(--panel-line)">
+            <div style="font-weight:800;font-size:17px">Rondas</div>
+            <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:6px">${roundOpts}</div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:10px;padding:14px 0;border-bottom:2px solid var(--panel-line)">
+            <div style="font-weight:800;font-size:17px">Tiempo por ronda</div>
+            <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:6px">${timeOpts}</div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:10px;padding:14px 0;border-bottom:2px solid var(--panel-line)">
+            <div style="display:flex;align-items:baseline;justify-content:space-between"><div style="font-weight:800;font-size:17px">Categorías</div><div style="font-size:13px;font-weight:700;color:var(--muted)">${cfg.categories.length} elegidas</div></div>
+            <div style="display:flex;flex-wrap:wrap;gap:8px">${catChips}</div>
+          </div>
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 0">
+            <div style="display:flex;flex-direction:column;gap:2px"><div style="font-weight:800;font-size:17px">Letras difíciles</div><div style="font-size:14px;color:var(--muted)">Incluye K, Ñ y otras poco comunes</div></div>
+            <button data-action="tfToggleHard" style="width:56px;height:32px;border-radius:999px;border:2px solid ${INK};background:${cfg.hard?MINT:'#F1E7D8'};position:relative;flex:0 0 auto"><span style="position:absolute;top:2px;left:${cfg.hard?'26px':'2px'};width:24px;height:24px;border-radius:50%;background:#fff;border:2px solid ${INK};transition:left .15s"></span></button>
+          </div>
         </div>
-        <div style="display:flex;flex-direction:column;gap:10px;padding:14px 0;border-bottom:2px solid var(--panel-line)">
-          <div style="font-weight:800;font-size:17px">Tiempo por ronda</div>
-          <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:6px">${timeOpts}</div>
+        <div style="display:flex;flex-direction:column;gap:14px">
+          <div style="text-align:center;font-size:14px;font-weight:700;color:var(--muted)">${estimate}</div>
+          <button class="btn-primary" data-action="confirmTfConfig">SIGUIENTE</button>
         </div>
-        <div style="display:flex;flex-direction:column;gap:10px;padding:14px 0;border-bottom:2px solid var(--panel-line)">
-          <div style="display:flex;align-items:baseline;justify-content:space-between"><div style="font-weight:800;font-size:17px">Categorías</div><div style="font-size:13px;font-weight:700;color:var(--muted)">${cfg.categories.length} elegidas</div></div>
-          <div style="display:flex;flex-wrap:wrap;gap:8px">${catChips}</div>
-        </div>
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 0">
-          <div style="display:flex;flex-direction:column;gap:2px"><div style="font-weight:800;font-size:17px">Letras difíciles</div><div style="font-size:14px;color:var(--muted)">Incluye K, Ñ y otras poco comunes</div></div>
-          <button data-action="tfToggleHard" style="width:56px;height:32px;border-radius:999px;border:2px solid ${INK};background:${cfg.hard?MINT:'#F1E7D8'};position:relative;flex:0 0 auto"><span style="position:absolute;top:2px;left:${cfg.hard?'26px':'2px'};width:24px;height:24px;border-radius:50%;background:#fff;border:2px solid ${INK};transition:left .15s"></span></button>
-        </div>
-      </div>
-      <div class="sticky-bottom">
-        <div style="text-align:center;font-size:14px;font-weight:700;color:var(--muted)">${estimate}</div>
-        <button class="btn-primary" data-action="confirmTfConfig">SIGUIENTE</button>
       </div>
     </div>`;
   }
@@ -2186,33 +2190,35 @@ class Game {
       return `<button data-action="dToggleCategory" data-cat="${cat}" style="padding:10px 14px;border-radius:14px;border:2px solid ${INK};background:${on?MINT:'#fff'};font-weight:800;font-size:14px">${esc(cat)}</button>`;
     }).join('');
     const estimate = '≈ '+Math.max(1,Math.round(cfg.rounds*(cfg.drawTime+cfg.chooseTime+15)/60))+' min de juego';
-    return `<div class="screen screen-narrow">
+    return `<div class="screen screen-narrow" style="padding-top:28px;padding-bottom:28px">
       <div class="top-bar"><button class="icon-btn" data-action="backToPicker" aria-label="Volver">${this.iconBack()}</button><div class="heading" style="font-size:28px">Dibujalo</div></div>
-      <div style="background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:6px 18px;display:flex;flex-direction:column">
-        <div style="display:flex;flex-direction:column;gap:10px;padding:14px 0;border-bottom:2px solid var(--panel-line)">
-          <div style="font-weight:800;font-size:17px">Rondas</div>
-          <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:6px">${roundOpts}</div>
+      <div style="flex:1;display:flex;flex-direction:column;justify-content:center;gap:22px;padding:16px 0">
+        <div style="background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:6px 18px;display:flex;flex-direction:column">
+          <div style="display:flex;flex-direction:column;gap:10px;padding:14px 0;border-bottom:2px solid var(--panel-line)">
+            <div style="font-weight:800;font-size:17px">Rondas</div>
+            <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:6px">${roundOpts}</div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:10px;padding:14px 0;border-bottom:2px solid var(--panel-line)">
+            <div style="font-weight:800;font-size:17px">Tiempo para elegir palabra</div>
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px">${chooseOpts}</div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:10px;padding:14px 0;border-bottom:2px solid var(--panel-line)">
+            <div style="font-weight:800;font-size:17px">Tiempo para dibujar</div>
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px">${drawOpts}</div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:10px;padding:14px 0;border-bottom:2px solid var(--panel-line)">
+            <div style="font-weight:800;font-size:17px">Categorías</div>
+            <div style="display:flex;flex-wrap:wrap;gap:8px">${catChips}</div>
+          </div>
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 0">
+            <div style="display:flex;flex-direction:column;gap:2px"><div style="font-weight:800;font-size:17px">Pistas</div><div style="font-size:14px;color:var(--muted)">Revela la categoría a los 30s si nadie adivinó</div></div>
+            <button data-action="dToggleHints" style="width:56px;height:32px;border-radius:999px;border:2px solid ${INK};background:${cfg.hints?MINT:'#F1E7D8'};position:relative;flex:0 0 auto"><span style="position:absolute;top:2px;left:${cfg.hints?'26px':'2px'};width:24px;height:24px;border-radius:50%;background:#fff;border:2px solid ${INK};transition:left .15s"></span></button>
+          </div>
         </div>
-        <div style="display:flex;flex-direction:column;gap:10px;padding:14px 0;border-bottom:2px solid var(--panel-line)">
-          <div style="font-weight:800;font-size:17px">Tiempo para elegir palabra</div>
-          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px">${chooseOpts}</div>
+        <div style="display:flex;flex-direction:column;gap:14px">
+          <div style="text-align:center;font-size:14px;font-weight:700;color:var(--muted)">${estimate}</div>
+          <button class="btn-primary" data-action="confirmDibujaloConfig">SIGUIENTE</button>
         </div>
-        <div style="display:flex;flex-direction:column;gap:10px;padding:14px 0;border-bottom:2px solid var(--panel-line)">
-          <div style="font-weight:800;font-size:17px">Tiempo para dibujar</div>
-          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px">${drawOpts}</div>
-        </div>
-        <div style="display:flex;flex-direction:column;gap:10px;padding:14px 0;border-bottom:2px solid var(--panel-line)">
-          <div style="font-weight:800;font-size:17px">Categorías</div>
-          <div style="display:flex;flex-wrap:wrap;gap:8px">${catChips}</div>
-        </div>
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 0">
-          <div style="display:flex;flex-direction:column;gap:2px"><div style="font-weight:800;font-size:17px">Pistas</div><div style="font-size:14px;color:var(--muted)">Revela la categoría a los 30s si nadie adivinó</div></div>
-          <button data-action="dToggleHints" style="width:56px;height:32px;border-radius:999px;border:2px solid ${INK};background:${cfg.hints?MINT:'#F1E7D8'};position:relative;flex:0 0 auto"><span style="position:absolute;top:2px;left:${cfg.hints?'26px':'2px'};width:24px;height:24px;border-radius:50%;background:#fff;border:2px solid ${INK};transition:left .15s"></span></button>
-        </div>
-      </div>
-      <div class="sticky-bottom">
-        <div style="text-align:center;font-size:14px;font-weight:700;color:var(--muted)">${estimate}</div>
-        <button class="btn-primary" data-action="confirmDibujaloConfig">SIGUIENTE</button>
       </div>
     </div>`;
   }
@@ -2233,7 +2239,7 @@ class Game {
     if(!opts){
       return `<div style="min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;text-align:center;padding:20px"><div class="spinner"></div><div style="font-weight:700;color:var(--muted)">Preparando tus opciones…</div></div>`;
     }
-    const cards = opts.map((o,i)=>`<button class="press-card" data-action="dChooseOption" data-i="${i}" style="display:flex;flex-direction:column;align-items:center;gap:8px;padding:20px 14px;border-radius:22px;background:#fff;border:2.5px solid ${INK};box-shadow:0 5px 0 ${INK}">
+    const cards = opts.map((o,i)=>`<button class="press-card" data-action="dChooseOption" data-i="${i}" style="display:flex;flex-direction:column;align-items:center;gap:8px;padding:20px 14px;border-radius:22px;background:#fff;border:2.5px solid ${INK}">
       <div style="font-size:40px">${o.emoji||this.iconPalette(34)}</div>
       <div class="heading" style="font-size:20px;text-align:center">${esc(o.word.toUpperCase())}</div>
       <div style="font-size:12px;font-weight:700;color:var(--muted)">${esc(o.category)}</div>
