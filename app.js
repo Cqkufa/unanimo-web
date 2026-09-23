@@ -2062,9 +2062,9 @@ class Game {
       const label = p.id===this.myId ? p.name+' (vos)' : p.name;
       const total = ph ? cur[p.id] : (prevT ? prevT[p.id] : 0);
       const bg = p.id===this.myId ? '#FFEDE6' : (idx===0 && ph ? '#FFF3CC' : '#fff');
-      const deltaText = d>0?'▲ Subió '+d : d<0?'▼ Bajó '+(-d) : 'Mantiene el puesto';
-      const deltaColor = d>0?'#0E8A66':d<0?'#B3341A':'var(--muted)';
-      return `<div style="position:absolute;left:0;right:0;top:${idx*86}px;height:72px;display:flex;align-items:center;gap:12px;padding:0 16px 0 10px;border-radius:22px;background:${bg};border:2px solid ${INK};box-shadow:0 4px 0 ${INK};transition:top .9s cubic-bezier(.34,1.45,.64,1)">
+      const deltaText = d>0?'▲ Subió '+d : d<0?'▼ Bajó '+(-d) : 'Sin cambios';
+      const deltaColor = d>0?'#0E8A66':d<0?'#B3341A':INK;
+      return `<div style="position:absolute;left:0;right:0;top:${idx*104}px;min-height:88px;display:flex;align-items:center;gap:12px;padding:10px 16px 10px 10px;border-radius:22px;background:${bg};border:2px solid ${INK};box-shadow:0 4px 0 ${INK};transition:top .9s cubic-bezier(.34,1.45,.64,1)">
         <div style="flex:0 0 auto;width:44px;text-align:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:32px">${idx+1}</div>
         <div style="width:46px;height:46px;flex:0 0 auto">${avatarSVG(p.avatar,46)}</div>
         <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
@@ -2086,7 +2086,7 @@ class Game {
         <div style="font-size:16px;font-weight:700;color:var(--muted)">Después de la ronda ${s.g.round+1} de ${cfg.rounds}</div>
       </div>
       <div style="display:flex;gap:6px;justify-content:center">${dots}</div>
-      <div style="position:relative;height:${pl.length*86}px">${rows}</div>
+      <div style="position:relative;height:${pl.length*104}px">${rows}</div>
       <div class="sticky-bottom">${bottom}</div>
     </div>`;
   }
@@ -2151,7 +2151,7 @@ class Game {
     </div>`).join('');
     const confettiHtml = this.confetti.map(c=>`<div style="position:absolute;top:-20px;left:${c.left};width:${c.w};height:${c.h};border-radius:3px;background:${c.color};border:1.5px solid ${INK};animation:fall ${c.dur} linear ${c.delay} infinite"></div>`).join('');
     const bottom = this.isHost
-      ? `<button class="btn-primary" data-action="playAgain">JUGAR DE NUEVO</button><button class="btn-secondary" data-action="backToPortal">ELEGIR OTRO JUEGO</button>`
+      ? `<button class="btn-primary" style="flex:1;min-width:0;height:auto;min-height:62px;padding:8px 6px;font-size:clamp(13px,4vw,20px)" data-action="playAgain">JUGAR DE NUEVO</button><button class="btn-secondary" style="flex:1;min-width:0;height:auto;min-height:54px;padding:8px 6px;font-size:clamp(11px,3.4vw,16px)" data-action="backToPortal">ELEGIR OTRO JUEGO</button>`
       : `<div style="height:54px;border-radius:16px;border:2px solid ${INK};background:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;color:var(--muted)">Esperando a ${esc(this.playerById(s.hostId)?.name||'el anfitrión')}…</div>`;
     return `<div style="position:relative;min-height:100vh;overflow:hidden">
       <div style="position:fixed;inset:0;pointer-events:none;z-index:1;overflow:hidden">${confettiHtml}</div>
@@ -2162,12 +2162,12 @@ class Game {
           <div class="heading" style="font-size:24px">${tot[w.id]} puntos</div>
         </div>
         <div style="display:flex;align-items:flex-end;justify-content:center;gap:10px">${podium}</div>
-        <div style="display:flex;flex-wrap:wrap;gap:20px;align-items:flex-start;margin-top:-28px">
-          <div style="flex:1 1 320px;min-width:0;background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:8px 18px">${finalRows}</div>
-          <div style="flex:1 1 420px;min-width:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px">${statsHtml}</div>
+        <div style="display:flex;flex-wrap:wrap;justify-content:center;gap:20px;align-items:flex-start;margin-top:-28px">
+          <div style="flex:1 1 320px;max-width:420px;min-width:0;background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:8px 18px">${finalRows}</div>
+          <div style="flex:1 1 260px;max-width:320px;min-width:0;display:flex;flex-direction:column;gap:12px">${statsHtml}</div>
         </div>
         <div class="sticky-bottom">
-          <div style="max-width:480px;margin:0 auto;padding:0 14px;display:flex;flex-direction:column;gap:12px">${bottom}</div>
+          <div style="max-width:560px;margin:0 auto;padding:0 14px;display:flex;flex-direction:row;align-items:center;gap:12px">${bottom}</div>
         </div>
       </div>
     </div>`;
@@ -2342,9 +2342,9 @@ class Game {
       const label = p.id===this.myId ? p.name+' (vos)' : p.name;
       const total = ph ? cur[p.id] : (prevT ? prevT[p.id] : 0);
       const bg = p.id===this.myId ? '#FFEDE6' : (idx===0 && ph ? '#FFF3CC' : '#fff');
-      const deltaText = d>0?'▲ Subió '+d : d<0?'▼ Bajó '+(-d) : 'Mantiene el puesto';
-      const deltaColor = d>0?'#0E8A66':d<0?'#B3341A':'var(--muted)';
-      return `<div style="position:absolute;left:0;right:0;top:${idx*86}px;height:72px;display:flex;align-items:center;gap:12px;padding:0 16px 0 10px;border-radius:22px;background:${bg};border:2px solid ${INK};box-shadow:0 4px 0 ${INK};transition:top .9s cubic-bezier(.34,1.45,.64,1)">
+      const deltaText = d>0?'▲ Subió '+d : d<0?'▼ Bajó '+(-d) : 'Sin cambios';
+      const deltaColor = d>0?'#0E8A66':d<0?'#B3341A':INK;
+      return `<div style="position:absolute;left:0;right:0;top:${idx*104}px;min-height:88px;display:flex;align-items:center;gap:12px;padding:10px 16px 10px 10px;border-radius:22px;background:${bg};border:2px solid ${INK};box-shadow:0 4px 0 ${INK};transition:top .9s cubic-bezier(.34,1.45,.64,1)">
         <div style="flex:0 0 auto;width:44px;text-align:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:32px">${idx+1}</div>
         <div style="width:46px;height:46px;flex:0 0 auto">${avatarSVG(p.avatar,46)}</div>
         <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
@@ -2366,7 +2366,7 @@ class Game {
         <div style="font-size:16px;font-weight:700;color:var(--muted)">Después de la ronda ${s.g.round+1} de ${cfg.rounds}</div>
       </div>
       <div style="display:flex;gap:6px;justify-content:center">${dots}</div>
-      <div style="position:relative;height:${pl.length*86}px">${rows}</div>
+      <div style="position:relative;height:${pl.length*104}px">${rows}</div>
       <div class="sticky-bottom">${bottom}</div>
     </div>`;
   }
@@ -2427,7 +2427,7 @@ class Game {
     </div>`).join('');
     const confettiHtml = this.confetti.map(c=>`<div style="position:absolute;top:-20px;left:${c.left};width:${c.w};height:${c.h};border-radius:3px;background:${c.color};border:1.5px solid ${INK};animation:fall ${c.dur} linear ${c.delay} infinite"></div>`).join('');
     const bottom = this.isHost
-      ? `<button class="btn-primary" data-action="playAgain">JUGAR DE NUEVO</button><button class="btn-secondary" data-action="backToPortal">ELEGIR OTRO JUEGO</button>`
+      ? `<button class="btn-primary" style="flex:1;min-width:0;height:auto;min-height:62px;padding:8px 6px;font-size:clamp(13px,4vw,20px)" data-action="playAgain">JUGAR DE NUEVO</button><button class="btn-secondary" style="flex:1;min-width:0;height:auto;min-height:54px;padding:8px 6px;font-size:clamp(11px,3.4vw,16px)" data-action="backToPortal">ELEGIR OTRO JUEGO</button>`
       : `<div style="height:54px;border-radius:16px;border:2px solid ${INK};background:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;color:var(--muted)">Esperando a ${esc(this.playerById(s.hostId)?.name||'el anfitrión')}…</div>`;
     return `<div style="position:relative;min-height:100vh;overflow:hidden">
       <div style="position:fixed;inset:0;pointer-events:none;z-index:1;overflow:hidden">${confettiHtml}</div>
@@ -2438,12 +2438,12 @@ class Game {
           <div class="heading" style="font-size:24px">${tot[w.id]} puntos</div>
         </div>
         <div style="display:flex;align-items:flex-end;justify-content:center;gap:10px">${podium}</div>
-        <div style="display:flex;flex-wrap:wrap;gap:20px;align-items:flex-start;margin-top:-28px">
-          <div style="flex:1 1 320px;min-width:0;background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:8px 18px">${finalRows}</div>
-          <div style="flex:1 1 420px;min-width:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px">${statsHtml}</div>
+        <div style="display:flex;flex-wrap:wrap;justify-content:center;gap:20px;align-items:flex-start;margin-top:-28px">
+          <div style="flex:1 1 320px;max-width:420px;min-width:0;background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:8px 18px">${finalRows}</div>
+          <div style="flex:1 1 260px;max-width:320px;min-width:0;display:flex;flex-direction:column;gap:12px">${statsHtml}</div>
         </div>
         <div class="sticky-bottom">
-          <div style="max-width:480px;margin:0 auto;padding:0 14px;display:flex;flex-direction:column;gap:12px">${bottom}</div>
+          <div style="max-width:560px;margin:0 auto;padding:0 14px;display:flex;flex-direction:row;align-items:center;gap:12px">${bottom}</div>
         </div>
       </div>
     </div>`;
@@ -2648,9 +2648,9 @@ class Game {
       const label = p.id===this.myId ? p.name+' (vos)' : p.name;
       const total = ph ? cur[p.id] : (prevT ? prevT[p.id] : 0);
       const bg = p.id===this.myId ? '#FFEDE6' : (idx===0 && ph ? '#FFF3CC' : '#fff');
-      const deltaText = d>0?'▲ Subió '+d : d<0?'▼ Bajó '+(-d) : 'Mantiene el puesto';
-      const deltaColor = d>0?'#0E8A66':d<0?'#B3341A':'var(--muted)';
-      return `<div style="position:absolute;left:0;right:0;top:${idx*86}px;height:72px;display:flex;align-items:center;gap:12px;padding:0 16px 0 10px;border-radius:22px;background:${bg};border:2px solid ${INK};box-shadow:0 4px 0 ${INK};transition:top .9s cubic-bezier(.34,1.45,.64,1)">
+      const deltaText = d>0?'▲ Subió '+d : d<0?'▼ Bajó '+(-d) : 'Sin cambios';
+      const deltaColor = d>0?'#0E8A66':d<0?'#B3341A':INK;
+      return `<div style="position:absolute;left:0;right:0;top:${idx*104}px;min-height:88px;display:flex;align-items:center;gap:12px;padding:10px 16px 10px 10px;border-radius:22px;background:${bg};border:2px solid ${INK};box-shadow:0 4px 0 ${INK};transition:top .9s cubic-bezier(.34,1.45,.64,1)">
         <div style="flex:0 0 auto;width:44px;text-align:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:32px">${idx+1}</div>
         <div style="width:46px;height:46px;flex:0 0 auto">${avatarSVG(p.avatar,46)}</div>
         <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
@@ -2673,7 +2673,7 @@ class Game {
         <div style="font-size:16px;font-weight:700;color:var(--muted)">Después de la ronda ${s.g.round+1} de ${cfg.rounds}</div>
       </div>
       <div style="display:flex;gap:6px;justify-content:center">${dots}</div>
-      <div style="position:relative;height:${pl.length*86}px">${rows}</div>
+      <div style="position:relative;height:${pl.length*104}px">${rows}</div>
       <div class="sticky-bottom">${bottom}</div>
     </div>`;
   }
@@ -2732,7 +2732,7 @@ class Game {
     </div>`).join('');
     const confettiHtml = this.confetti.map(c=>`<div style="position:absolute;top:-20px;left:${c.left};width:${c.w};height:${c.h};border-radius:3px;background:${c.color};border:1.5px solid ${INK};animation:fall ${c.dur} linear ${c.delay} infinite"></div>`).join('');
     const bottom = this.isHost
-      ? `<button class="btn-primary" data-action="playAgain">JUGAR DE NUEVO</button><button class="btn-secondary" data-action="backToPortal">ELEGIR OTRO JUEGO</button>`
+      ? `<button class="btn-primary" style="flex:1;min-width:0;height:auto;min-height:62px;padding:8px 6px;font-size:clamp(13px,4vw,20px)" data-action="playAgain">JUGAR DE NUEVO</button><button class="btn-secondary" style="flex:1;min-width:0;height:auto;min-height:54px;padding:8px 6px;font-size:clamp(11px,3.4vw,16px)" data-action="backToPortal">ELEGIR OTRO JUEGO</button>`
       : `<div style="height:54px;border-radius:16px;border:2px solid ${INK};background:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;color:var(--muted)">Esperando a ${esc(this.playerById(this.state.hostId)?.name||'el anfitrión')}…</div>`;
     return `<div style="position:relative;min-height:100vh;overflow:hidden">
       <div style="position:fixed;inset:0;pointer-events:none;z-index:1;overflow:hidden">${confettiHtml}</div>
@@ -2743,12 +2743,12 @@ class Game {
           <div class="heading" style="font-size:24px">${tot[w.id]} puntos</div>
         </div>
         <div style="display:flex;align-items:flex-end;justify-content:center;gap:10px">${podium}</div>
-        <div style="display:flex;flex-wrap:wrap;gap:20px;align-items:flex-start;margin-top:-28px">
-          <div style="flex:1 1 320px;min-width:0;background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:8px 18px">${finalRows}</div>
-          <div style="flex:1 1 420px;min-width:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px">${statsHtml}</div>
+        <div style="display:flex;flex-wrap:wrap;justify-content:center;gap:20px;align-items:flex-start;margin-top:-28px">
+          <div style="flex:1 1 320px;max-width:420px;min-width:0;background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:8px 18px">${finalRows}</div>
+          <div style="flex:1 1 260px;max-width:320px;min-width:0;display:flex;flex-direction:column;gap:12px">${statsHtml}</div>
         </div>
         <div class="sticky-bottom">
-          <div style="max-width:480px;margin:0 auto;padding:0 14px;display:flex;flex-direction:column;gap:12px">${bottom}</div>
+          <div style="max-width:560px;margin:0 auto;padding:0 14px;display:flex;flex-direction:row;align-items:center;gap:12px">${bottom}</div>
         </div>
       </div>
     </div>`;
