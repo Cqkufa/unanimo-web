@@ -198,7 +198,7 @@ class Game {
 
   /* ---------- lifecycle helpers ---------- */
   later(fn, ms){ const t=setTimeout(fn, ms); this.timers.push(t); return t; }
-  clearTimers(){ this.timers.forEach(clearTimeout); this.timers=[]; clearInterval(this.tick); clearInterval(this.revealTick); clearInterval(this.hostWatch); }
+  clearTimers(){ this.timers.forEach(clearTimeout); this.timers=[]; clearInterval(this.tick); clearInterval(this.revealTick); clearInterval(this.hostWatch); clearInterval(this.dWatch); clearInterval(this.tfWatch); clearInterval(this.impWatch); }
 
   /* ---------- sound ---------- */
   playClick(){ if(!this.soundOn) return; beep(760, 0.05, 'sine', 0.05); }
@@ -629,8 +629,9 @@ class Game {
       }
       if(s.phase === 'impWord'){
         this.local.impMyWord = null; this.local.impIsImpostor = false; this.local.impAllyName = null;
-        this.local.impReadyConfirmed = false; this.local.impIntro = true;
-        this.later(()=>{ this.local.impIntro=false; this.renderScreen(); }, 2600);
+        this.local.impWordArrived = false;
+        this.local.impReadyConfirmed = false; this.local.impIntro = true; this.local.impCountdown = null;
+        this.runImpIntro();
       }
       if(s.phase === 'impClue'){
         this.local.impClueDraft = '';
@@ -670,7 +671,11 @@ class Game {
     // impWord: someone else's ready-check ticks in; impVote: the public
     // "X/Y votaron" counter ticks up; impGuess: the caught impostor's
     // result appears for everyone once the host resolves it.
-    else if(this.local.screen === 'impWord') this.renderScreen();
+    // Only the ready-checklist view needs to reflect other players' pings
+    // live — re-rendering during the intro/word-reveal sub-states too would
+    // remount them and replay their entrance animation on every bot that
+    // readies up, looking like the word was stuttering/glitching.
+    else if(this.local.screen === 'impWord'){ if(!this.local.impIntro && this.local.impReadyConfirmed) this.renderScreen(); }
     else if(this.local.screen === 'impVote') this.renderScreen();
     else if(this.local.screen === 'impGuess') this.renderScreen();
   }
