@@ -165,8 +165,45 @@ class Game {
   toggleSound(){
     this.soundOn = !this.soundOn;
     try{ localStorage.setItem('unanimo:sound', this.soundOn?'on':'off'); }catch(e){}
-    if(this.soundOn) ensureAudio();
+    if(this.soundOn){ ensureAudio(); if(this.local.screen==='lobby') this.startLobbyMusic(); }
+    else this.stopLobbyMusic();
     this.renderHud();
+  }
+
+  /* ---------- lobby music: a gentle looping chord pad, synthesized —
+     no audio files, muted by the same sound toggle as everything else. */
+  startLobbyMusic(){
+    if(!this.soundOn || this._musicPlaying) return;
+    const ctx = ensureAudio(); if(!ctx) return;
+    this._musicPlaying = true;
+    if(!this._musicGain){ this._musicGain = ctx.createGain(); this._musicGain.gain.value = 0.055; this._musicGain.connect(ctx.destination); }
+    const chords = [
+      [261.63, 329.63, 392.00, 523.25], // Cmaj
+      [220.00, 261.63, 329.63, 440.00], // Am
+      [174.61, 220.00, 261.63, 349.23], // Fmaj
+      [196.00, 246.94, 293.66, 392.00], // Gmaj
+    ];
+    let i = 0;
+    const step = ()=>{
+      if(!this._musicPlaying) return;
+      const notes = chords[i % chords.length]; i++;
+      const t0 = ctx.currentTime;
+      notes.forEach((freq,k)=>{
+        const osc = ctx.createOscillator(), g = ctx.createGain();
+        osc.type = 'sine'; osc.frequency.value = freq;
+        g.gain.setValueAtTime(0, t0);
+        g.gain.linearRampToValueAtTime(k===0?1:0.5, t0+0.7);
+        g.gain.linearRampToValueAtTime(0, t0+3.4);
+        osc.connect(g).connect(this._musicGain);
+        osc.start(t0); osc.stop(t0+3.5);
+      });
+      this._musicTimer = setTimeout(step, 3100);
+    };
+    step();
+  }
+  stopLobbyMusic(){
+    this._musicPlaying = false;
+    clearTimeout(this._musicTimer);
   }
 
   toast(msg, color){
@@ -1391,6 +1428,8 @@ class Game {
     this.root.innerHTML = html;
     this.renderModals();
     this.renderHud();
+
+    if(sc==='lobby') this.startLobbyMusic(); else this.stopLobbyMusic();
 
     if(sc==='round'){
       this.later(()=>{ const el=this.root.querySelector('[data-role="word-input"][data-index="0"]'); if(el) el.focus({preventScroll:true}); }, 50);
