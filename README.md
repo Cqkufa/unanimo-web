@@ -1,14 +1,18 @@
 # Unánimo
 
-> Pensá como los demás.
+> Party games para jugar con amigos.
 
-Juego de fiesta multijugador para jugar en grupo, cada uno desde su propio celular. Todos reciben la misma palabra, escriben lo que creen que van a poner los demás, y suman puntos por cada coincidencia. No gana lo más original: gana pensar igual que el resto.
+Un portal de minijuegos multijugador para jugar en grupo, cada uno desde su propio celular. Creás una sala una sola vez, compartís el código de 5 letras, y desde ahí el anfitrión va eligiendo a qué jugar — sin volver a escribir el código entre partida y partida.
 
-Jugá una partida en vivo: creá una sala, compartí el código de 5 letras, y arranquen cuando estén todos.
+**Tres juegos:**
 
-Cada jugador arma su propio personaje al entrar: elige nombre y, con flechitas, el color de piel, ojos, nariz, boca y un sombrero opcional (dibujado en SVG, sin imágenes externas). Hay efectos de sonido (clics, alguien se une — silenciables con el ícono de parlante) y un chat flotante para hablar con el resto durante la partida.
+- **Unánimo** — todos reciben la misma palabra, escriben lo que creen que el resto también va a poner, y suman puntos por cada coincidencia. No gana lo más original: gana pensar igual que el resto.
+- **Dibujalo** — en cada ronda alguien dibuja (elige entre 3 palabras, en privado) y el resto adivina en tiempo real mientras el trazo aparece en su pantalla. Puntos por velocidad; el dibujante también suma según cuántos entendieron su dibujo.
+- **Tutti Frutti** — misma letra para todos, una palabra por categoría. Cualquiera puede gritar STOP y termina la ronda para todos. 10 puntos si tu respuesta es válida y única, 5 si alguien más puso lo mismo, 0 si está vacía o inválida (se puede impugnar 🚩).
 
-## Cómo jugar
+Cada jugador arma su propio personaje al entrar a la sala (una sola vez, no por juego): elige nombre y, con flechitas, el color de piel, ojos, boca y un accesorio opcional — todo dibujado en pixel art vía SVG, sin imágenes externas. Hay efectos de sonido (clics, alguien se une — silenciables con el ícono de parlante) y un chat flotante para hablar con el resto durante toda la sesión.
+
+## Cómo jugar Unánimo
 
 1. Todos reciben la misma palabra (ej: **PLAYA**).
 2. Cada uno escribe varias palabras que cree que el resto también va a escribir.
@@ -37,19 +41,23 @@ y abrí `http://localhost:4173`.
 2. En **Settings → Pages**, elegí la rama `main` y carpeta `/ (root)`.
 3. Listo — es un sitio 100% estático, no requiere ningún paso de build.
 
+La palabra secreta de Dibujalo nunca se guarda en el estado compartido: el host la retiene solo en memoria y se la manda al dibujante mediante un mensaje dirigido (`to: <id>`) en el mismo canal — cualquier otro cliente lo recibe pero lo descarta sin abrirlo. Los trazos del lápiz viajan como eventos livianos aparte (no como parte del estado de la partida), para que dibujar se sienta instantáneo sin sobrecargar la sincronización.
+
 ## Limitaciones conocidas
 
 - Si el anfitrión cierra la pestaña, la partida queda sin quien la conduzca (no hay traspaso de host).
 - Si un jugador recarga la página, pierde su lugar en la sala (no hay reconexión automática todavía).
-- El canal de Supabase Realtime es público (clave `anon`): cualquiera que sepa el código de sala de 5 caracteres podría, en teoría, enviar mensajes a ese canal. Para un juego casual de fiesta el riesgo es mínimo, pero no está pensado para datos sensibles.
-- Los relojes de cada dispositivo deben estar razonablemente sincronizados para que el cronómetro de ronda se vea igual en todos los celulares.
+- El canal de Supabase Realtime es público (clave `anon`): cualquiera que sepa el código de sala de 5 caracteres podría, en teoría, enviar o inspeccionar mensajes de ese canal (incluida la palabra secreta de Dibujalo, si abre las herramientas de desarrollador). Para un juego casual de fiesta el riesgo es mínimo, pero no está pensado para datos sensibles.
+- Los relojes de cada dispositivo deben estar razonablemente sincronizados para que los cronómetros se vean igual en todos los celulares.
+- En Dibujalo, un jugador que se une a mitad de una ronda no ve los trazos ya dibujados antes de unirse (no hay "replay" del dibujo, solo lo que se dibuja de ahí en adelante).
 
 ## Estructura
 
 ```
 index.html        Punto de entrada
 style.css         Sistema visual (colores, tipografía, componentes)
-app.js            Lógica del juego, renderizado y sincronización en tiempo real
-words.js          Banco de palabras/consignas
+app.js            Portal + los tres juegos (rooms, lobby, red, avatares, chat, sonido)
+words.js          Banco de palabras de Unánimo
+wordbank.js        Banco de palabras/categorías de Dibujalo y Tutti Frutti
 supabaseClient.js Cliente de Supabase (Realtime Broadcast)
 ```

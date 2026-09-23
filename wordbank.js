@@ -50,10 +50,11 @@ export function dibujaloFunnyLine(){ return DIBUJALO_FUNNY_EMPTY[Math.floor(Math
 
 // Picks 3 words of similar difficulty (mixing categories) that haven't
 // been used recently in this game.
-export function pickDibujaloTrio(usedWords){
+export function pickDibujaloTrio(usedWords, allowedCategories){
   const used = new Set((usedWords||[]).map(w=>w.toLowerCase()));
+  const cats = (allowedCategories && allowedCategories.length) ? allowedCategories : Object.keys(DIBUJALO_BANK);
   const all = [];
-  for(const cat in DIBUJALO_BANK) DIBUJALO_BANK[cat].forEach(e=>all.push({...e, category:cat}));
+  cats.forEach(cat=>{ (DIBUJALO_BANK[cat]||[]).forEach(e=>all.push({...e, category:cat})); });
   const fresh = all.filter(e=>!used.has(e.word.toLowerCase()));
   const pool = fresh.length>=3 ? fresh : all;
   // Group by difficulty, prefer picking all 3 from the same difficulty tier

@@ -140,9 +140,10 @@ class Game {
       avatar: randomAvatar(),
       chatOpen:false, chatUnread:0, chatDraft:'',
       hostFlow: null, // host-only, LOCAL/unsynced: which game's config screen (if any) the host is looking at from the lobby
+      dColor: INK, dSize: 6, dTool: 'brush', dGuessDraft: '', dOptions: null,
     };
     this.uDraft = { rounds:3, words:6, time:45 };
-    this.dDraft = { rounds:6, chooseTime:10, drawTime:60, hints:true };
+    this.dDraft = { rounds:6, chooseTime:10, drawTime:60, hints:true, categories:Object.keys(DIBUJALO_BANK) };
     this.tfDraft = { rounds:5, time:60, categories:['nombre','animal','pais','comida','objeto','pelicula'], hard:false };
     this.state = null; // host-authoritative shared state, once in a room
     this.toasts = [];
@@ -222,6 +223,14 @@ class Game {
     this.channel.on('broadcast', {event:'state'}, ({payload})=> this.onState(payload));
     this.channel.on('broadcast', {event:'action'}, ({payload})=> { if(this.isHost) this.onAction(payload); });
     this.channel.on('broadcast', {event:'chat'}, ({payload})=> this.onChatMessage(payload));
+    // Dibujalo: targeted word-choice delivery (only the drawer's client
+    // acts on it — everyone else's handler discards it unopened) plus
+    // live drawing strokes, broadcast directly peer-to-peer like chat so
+    // they never bloat the authoritative game state.
+    this.channel.on('broadcast', {event:'dWords'}, ({payload})=>{ if(payload.to===this.myId) this.dReceiveWords(payload.options); });
+    this.channel.on('broadcast', {event:'dAutoChosen'}, ({payload})=>{ if(payload.to===this.myId) this.local.dChosenWord = payload.word; });
+    this.channel.on('broadcast', {event:'stroke'}, ({payload})=> this.dOnStroke(payload));
+    this.channel.on('broadcast', {event:'dClear'}, ()=> this.dOnClear());
     await new Promise(resolve=>{
       this.channel.subscribe(status=>{ if(status==='SUBSCRIBED') resolve(); });
     });
@@ -387,6 +396,15 @@ class Game {
       this.state.g.flags[r][key] = arr;
       this.broadcastState();
     }
+    else if(msg.type === 'dChoose'){
+      if(this.state.gameId!=='dibujalo' || !this.state.g || msg.round!==this.state.g.round) return;
+      if(this.state.g.drawerOf[msg.round]!==msg.id) return;
+      this.dHostWordChosen(msg.id, msg.word, msg.category, msg.round, false);
+    }
+    else if(msg.type === 'dGuess'){
+      if(this.state.gameId!=='dibujalo' || !this.state.g || msg.round!==this.state.g.round) return;
+      this.dHostGuess(msg.id, msg.text, msg.ms, msg.round);
+    }
   }
 
   checkAllDone(){
@@ -450,6 +468,17 @@ class Game {
       if(s.phase === 'tfReview'){
         this.tfSubmitMyAnswers();
       }
+      if(s.phase === 'dChoose'){
+        this.local.dOptions = null;
+        this.dStartLocalTimer('choose');
+      }
+      if(s.phase === 'dDraw'){
+        this.local.dGuessDraft = '';
+        this.dStartLocalTimer('draw');
+      }
+      if(s.phase === 'dReveal'){
+        this.dCaptureFinalImage(); // canvas element from 'dDraw' is still mounted right up until renderScreen() below
+      }
       this.renderScreen();
       return;
     }
@@ -461,6 +490,8 @@ class Game {
     // A straggler's answer can arrive after reveal has already started
     // (see the 'submit' handler above) — refresh so it's not lost from view.
     else if(this.local.screen === 'reveal') this.renderScreen();
+    else if(this.local.screen === 'dDraw') this.dPatchGuesses();
+    else if(this.local.screen === 'dChoose') this.renderScreen();
   }
 
   /* ---------- round flow (host drives global stage) ---------- */
@@ -729,6 +760,290 @@ class Game {
     this.broadcastState();
   }
 
+  /* ================= DIBUJALO ================= */
+  confirmDibujaloConfig(){
+    if(!this.isHost) return;
+    if(this.dDraft.categories.length < 1){ this.toast('Elegí al menos una categoría', CORAL); return; }
+    this.state.gameId = 'dibujalo';
+    this.state.gameConfig = { ...this.dDraft, categories:[...this.dDraft.categories] };
+    this.state.g = {
+      round:-1, order:[], usedWords:[], drawerOf:[], word:[], category:[],
+      chooseEndAt:0, drawEndAt:0, guesses:[], correctOrder:[], hintUsed:[], hintCategory:[],
+    };
+    this.state.stage = (this.state.stage||0) + 1;
+    this.local.hostFlow = null;
+    this.broadcastState();
+  }
+  dStartGame(){
+    if(!this.isHost) return;
+    const order = this.players().map(p=>p.id);
+    for(let i=order.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [order[i],order[j]]=[order[j],order[i]]; }
+    this.state.g.order = order;
+    this.state.g.usedWords = []; this.state.g.drawerOf = []; this.state.g.word = []; this.state.g.category = [];
+    this.state.g.guesses = []; this.state.g.correctOrder = []; this.state.g.hintUsed = []; this.state.g.hintCategory = [];
+    this.dStartRound(0);
+  }
+  dStartRound(r){
+    const order = this.state.g.order;
+    const drawerId = order[r % order.length];
+    const trio = pickDibujaloTrio(this.state.g.usedWords, this.state.gameConfig.categories);
+    this.dPendingTrio = trio; // host-only — never part of broadcast state
+    this.dSecretWord = null;
+    this.state.g.round = r;
+    this.state.g.drawerOf[r] = drawerId;
+    this.state.g.guesses[r] = [];
+    this.state.g.correctOrder[r] = [];
+    this.state.g.hintUsed[r] = false;
+    this.state.g.hintCategory[r] = null;
+    this.state.g.chooseEndAt = Date.now() + this.state.gameConfig.chooseTime*1000;
+    this.state.phase = 'dChoose';
+    this.state.stage = (this.state.stage||0) + 1;
+    this.broadcastState();
+    const wireOptions = trio.map(t=>({word:t.word, emoji:t.emoji, category:t.category, difficulty:t.difficulty}));
+    // Broadcast has self:false — if the host is also the drawer they'd
+    // never receive their own message, so hand it to themselves directly.
+    if(drawerId === this.myId) this.dReceiveWords(wireOptions);
+    else this.send('dWords', { to: drawerId, options: wireOptions });
+    clearInterval(this.dWatch);
+    this.dWatch = setInterval(()=>{
+      if(!this.isHost || this.state.phase!=='dChoose' || this.state.g.round!==r){ clearInterval(this.dWatch); return; }
+      if(Date.now() >= this.state.g.chooseEndAt){
+        clearInterval(this.dWatch);
+        const pick = this.dPendingTrio[Math.floor(Math.random()*this.dPendingTrio.length)];
+        this.dHostWordChosen(drawerId, pick.word, pick.category, r, true);
+      }
+    }, 400);
+  }
+  // Drawer-side: received their 3 private options.
+  dReceiveWords(options){
+    this.local.dOptions = options;
+    this.renderScreen();
+  }
+  dChooseWord(word, category){
+    if(!this.state || this.state.phase!=='dChoose') return;
+    if(this.state.g.drawerOf[this.state.g.round] !== this.myId) return;
+    this.local.dChosenWord = word; // remembered locally too — dSecretWord below is host-only
+    if(this.isHost) this.dHostWordChosen(this.myId, word, category, this.state.g.round, false);
+    else this.sendAction('dChoose', { id:this.myId, round:this.state.g.round, word, category });
+    this.local.dOptions = null;
+  }
+  // Host-only: the secret word is written straight into a host-local
+  // variable, never into the broadcast state, so no other client ever
+  // receives it before the round's reveal.
+  dHostWordChosen(drawerId, word, category, r, auto){
+    if(!this.isHost) return;
+    if(this.state.phase!=='dChoose' || this.state.g.round!==r) return;
+    clearInterval(this.dWatch);
+    this.dSecretWord = word;
+    if(drawerId === this.myId) this.local.dChosenWord = word;
+    else this.send('dAutoChosen', { to:drawerId, word }); // covers the timeout-auto-pick case for a guest drawer
+    this.state.g.category[r] = category;
+    this.state.g.drawEndAt = Date.now() + this.state.gameConfig.drawTime*1000;
+    this.state.phase = 'dDraw';
+    this.state.stage = (this.state.stage||0) + 1;
+    this.broadcastState();
+    if(auto) this.toast('¡Tiempo! Se eligió por vos', CORAL);
+    clearInterval(this.dWatch);
+    this.dWatch = setInterval(()=>{
+      if(!this.isHost || this.state.phase!=='dDraw' || this.state.g.round!==r){ clearInterval(this.dWatch); return; }
+      const elapsed = this.state.gameConfig.drawTime*1000 - (this.state.g.drawEndAt - Date.now());
+      if(this.state.gameConfig.hints && !this.state.g.hintUsed[r] && elapsed >= 30000){
+        this.state.g.hintUsed[r] = true;
+        this.state.g.hintCategory[r] = this.state.g.category[r];
+        this.broadcastState();
+      }
+      if(Date.now() >= this.state.g.drawEndAt){ clearInterval(this.dWatch); this.dHostReveal(r); }
+    }, 500);
+  }
+  dHostReveal(r){
+    if(!this.isHost) return;
+    if(this.state.phase!=='dDraw' || this.state.g.round!==r) return;
+    clearInterval(this.dWatch);
+    this.state.g.word[r] = this.dSecretWord || '?';
+    this.state.g.usedWords = [...this.state.g.usedWords, this.state.g.word[r]];
+    this.state.phase = 'dReveal';
+    this.state.stage = (this.state.stage||0) + 1;
+    this.broadcastState();
+  }
+  dNext(){
+    if(!this.isHost) return;
+    if(this.state.g.round+1 < this.state.gameConfig.rounds){ this.dStartRound(this.state.g.round+1); }
+    else { this.state.phase='dFinal'; this.state.stage=(this.state.stage||0)+1; this.broadcastState(); }
+  }
+  dPlayAgain(){
+    if(!this.isHost) return;
+    const order = this.players().map(p=>p.id);
+    for(let i=order.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [order[i],order[j]]=[order[j],order[i]]; }
+    this.state.g = {
+      round:-1, order, usedWords:[], drawerOf:[], word:[], category:[],
+      chooseEndAt:0, drawEndAt:0, guesses:[], correctOrder:[], hintUsed:[], hintCategory:[],
+    };
+    this.state.phase = 'lobby';
+    this.state.stage = (this.state.stage||0) + 1;
+    this.broadcastState();
+  }
+
+  /* ---------- Dibujalo: guessing ---------- */
+  dSendGuess(){
+    const text = (this.local.dGuessDraft||'').trim();
+    if(!text || !this.state) return;
+    const r = this.state.g.round;
+    if(this.state.g.drawerOf[r]===this.myId) return;
+    const already = (this.state.g.correctOrder[r]||[]).some(e=>e.id===this.myId);
+    if(already) return;
+    this.local.dGuessDraft = '';
+    const startedAt = this.state.g.drawEndAt - this.state.gameConfig.drawTime*1000;
+    const ms = Date.now() - startedAt;
+    if(this.isHost) this.dHostGuess(this.myId, text, ms, r);
+    else this.sendAction('dGuess', { id:this.myId, round:r, text, ms });
+    this.renderScreen();
+  }
+  // Host-only: the only place the guess is actually checked against the
+  // secret word — guessers' own clients never know it.
+  dHostGuess(id, text, ms, r){
+    if(!this.isHost) return;
+    if(this.state.phase!=='dDraw' || this.state.g.round!==r) return;
+    if(this.state.g.drawerOf[r]===id) return;
+    if((this.state.g.correctOrder[r]||[]).some(e=>e.id===id)) return;
+    const correct = norm(text) === norm(this.dSecretWord||'');
+    this.state.g.guesses[r] = [...(this.state.g.guesses[r]||[]).slice(-49), {id, text, correct, ts:Date.now()}];
+    if(correct){
+      this.state.g.correctOrder[r] = [...(this.state.g.correctOrder[r]||[]), {id, ms}];
+      const p = this.playerById(id);
+      if(p) this.toast('🎉 ¡'+p.name.toUpperCase()+' ADIVINÓ!', MINT);
+      const guessers = this.players().length - 1;
+      if(this.state.g.correctOrder[r].length >= guessers){ this.later(()=>this.dHostReveal(r), 1200); }
+    }
+    this.broadcastState();
+  }
+
+  /* ---------- Dibujalo: scoring ---------- */
+  dPoints(r){
+    const out = {}; this.players().forEach(p=>out[p.id]=0);
+    const order = this.state.g.correctOrder[r]||[];
+    const RANKS = [100,75,50];
+    order.forEach((entry,i)=>{ out[entry.id] = i<3 ? RANKS[i] : 25; });
+    const drawerId = this.state.g.drawerOf[r];
+    if(drawerId!=null) out[drawerId] = (out[drawerId]||0) + 10*order.length;
+    return out;
+  }
+  dTotals(uptoRound){
+    const t = {}; this.players().forEach(p=>t[p.id]=0);
+    for(let r=0;r<=uptoRound;r++){ if(this.state.g.drawerOf[r]==null) continue; const pts=this.dPoints(r); for(const id in pts) t[id]=(t[id]||0)+pts[id]; }
+    return t;
+  }
+
+  /* ---------- Dibujalo: canvas drawing (direct 2D context, never re-rendered via innerHTML mid-round) ---------- */
+  dSetupCanvas(){
+    const canvas = this.root.querySelector('#dCanvas');
+    if(!canvas) return;
+    this.dCanvasEl = canvas;
+    this.dCtx = canvas.getContext('2d');
+    this.dCtx.fillStyle = '#fff';
+    this.dCtx.fillRect(0,0,canvas.width,canvas.height);
+    this.dCtx.lineCap = 'round'; this.dCtx.lineJoin = 'round';
+    const isDrawer = this.state.g.drawerOf[this.state.g.round] === this.myId;
+    if(!isDrawer) return;
+    let drawing=false, lastPt=null, buffer=[];
+    const flush = ()=>{
+      if(buffer.length<2) return;
+      this.send('stroke', { points:buffer, color:this.local.dTool==='eraser'?'#fff':this.local.dColor, size:this.local.dTool==='eraser'?this.local.dSize*3:this.local.dSize });
+      buffer = buffer.slice(-1);
+    };
+    clearInterval(this._strokeFlushTimer);
+    this._strokeFlushTimer = setInterval(flush, 90);
+    const down = e=>{
+      e.preventDefault(); drawing=true;
+      const p = this.dGetPoint(e, canvas); lastPt=p; buffer=[p];
+    };
+    const move = e=>{
+      if(!drawing) return; e.preventDefault();
+      const p = this.dGetPoint(e, canvas);
+      this.dDrawSegment(this.dCtx, lastPt, p, this.local.dTool==='eraser'?'#fff':this.local.dColor, this.local.dTool==='eraser'?this.local.dSize*3:this.local.dSize, canvas);
+      buffer.push(p); lastPt=p;
+    };
+    const up = ()=>{ if(!drawing) return; drawing=false; flush(); buffer=[]; };
+    canvas.addEventListener('pointerdown', down);
+    canvas.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    canvas.style.touchAction = 'none';
+    this._dCleanup = ()=>{ canvas.removeEventListener('pointerdown',down); canvas.removeEventListener('pointermove',move); window.removeEventListener('pointerup',up); clearInterval(this._strokeFlushTimer); };
+  }
+  dGetPoint(e, canvas){
+    const rect = canvas.getBoundingClientRect();
+    return { x:(e.clientX-rect.left)/rect.width, y:(e.clientY-rect.top)/rect.height };
+  }
+  dDrawSegment(ctx, from, to, color, size, canvas){
+    ctx.strokeStyle = color; ctx.lineWidth = size;
+    ctx.beginPath();
+    ctx.moveTo(from.x*canvas.width, from.y*canvas.height);
+    ctx.lineTo(to.x*canvas.width, to.y*canvas.height);
+    ctx.stroke();
+  }
+  dOnStroke(payload){
+    if(!this.state || !this.dCtx || !this.dCanvasEl) return;
+    if(this.state.g && this.state.g.drawerOf[this.state.g.round]===this.myId) return; // I drew this myself already
+    const pts = payload.points||[];
+    for(let i=1;i<pts.length;i++){ this.dDrawSegment(this.dCtx, pts[i-1], pts[i], payload.color, payload.size, this.dCanvasEl); }
+  }
+  dOnClear(){
+    if(!this.dCtx || !this.dCanvasEl) return;
+    this.dCtx.fillStyle = '#fff';
+    this.dCtx.fillRect(0,0,this.dCanvasEl.width,this.dCanvasEl.height);
+  }
+  dCaptureFinalImage(){
+    try{ this.local.dFinalImage = this.dCanvasEl ? this.dCanvasEl.toDataURL('image/png') : null; }
+    catch(e){ this.local.dFinalImage = null; }
+  }
+  dClearCanvas(){
+    if(this.state.g.drawerOf[this.state.g.round]!==this.myId) return;
+    this.dOnClear();
+    this.send('dClear', {});
+  }
+  dPatchGuesses(){
+    const el = this.root.querySelector('[data-el="dGuessFeed"]');
+    if(el) el.outerHTML = this.dGuessFeedHtml();
+    const cnt = this.root.querySelector('[data-el="dCorrectCount"]');
+    if(cnt){ const r=this.state.g.round; cnt.textContent = (this.state.g.correctOrder[r]||[]).length+' / '+(this.players().length-1); }
+  }
+  dGuessFeedHtml(){
+    const s = this.state, r = s.g.round, pl = this.players(), byId={}; pl.forEach(p=>byId[p.id]=p);
+    const list = (s.g.guesses[r]||[]).slice(-12).reverse();
+    const rows = list.map(g=>{
+      const p = byId[g.id]; if(!p) return '';
+      return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0">
+        <div style="width:22px;height:22px;flex:0 0 auto">${avatarSVG(p.avatar,22)}</div>
+        <div style="font-size:13px;font-weight:700;color:var(--muted)">${esc(p.name)}:</div>
+        <div style="flex:1;min-width:0;font-size:14px;font-weight:800;overflow-wrap:anywhere">${esc(g.text)}</div>
+        ${g.correct?`<div style="flex:0 0 auto;font-size:14px">✓</div>`:''}
+      </div>`;
+    }).join('') || `<div style="text-align:center;color:var(--muted);font-size:13px;font-weight:700;padding:10px 0">Nadie escribió todavía…</div>`;
+    return `<div data-el="dGuessFeed" style="display:flex;flex-direction:column;gap:2px;max-height:220px;overflow-y:auto">${rows}</div>`;
+  }
+  dStartLocalTimer(kind){
+    clearInterval(this.tick);
+    this.tick = setInterval(()=>{
+      if(this.local.screen!=='dChoose' && this.local.screen!=='dDraw'){ clearInterval(this.tick); return; }
+      const endAt = kind==='choose' ? this.state.g.chooseEndAt : this.state.g.drawEndAt;
+      const left = Math.max(0, Math.round((endAt - Date.now())/1000));
+      this.dPatchTimer(left);
+      if(left<=0) clearInterval(this.tick);
+    }, 500);
+  }
+  dPatchTimer(left){
+    const textEl = this.root.querySelector('[data-el="dTimerText"]');
+    const boxEl = this.root.querySelector('[data-el="dTimerBox"]');
+    if(textEl) textEl.textContent = mmss(left);
+    const urgent = left<=10;
+    if(boxEl){ boxEl.style.background = urgent ? CORAL : '#fff'; boxEl.style.animation = urgent ? 'tick 1s ease-in-out infinite' : 'none'; }
+  }
+  dPatchToolbar(){
+    this.root.querySelectorAll('[data-el="dColorBtn"]').forEach(b=>{ b.style.boxShadow = b.dataset.color===this.local.dColor && this.local.dTool==='brush' ? `0 0 0 3px #fff, 0 0 0 5px ${INK}` : 'none'; });
+    this.root.querySelectorAll('[data-el="dSizeBtn"]').forEach(b=>{ const on = Number(b.dataset.size)===this.local.dSize; b.style.background = on?INK:'#fff'; b.style.color = on?'var(--cream)':INK; });
+    const eraserBtn = this.root.querySelector('[data-el="dEraserBtn"]');
+    if(eraserBtn){ const on = this.local.dTool==='eraser'; eraserBtn.style.background = on?INK:'#fff'; eraserBtn.style.color = on?'var(--cream)':INK; }
+  }
+
   /* ---------- local per-client timer for round screen ---------- */
   startLocalTimer(){
     clearInterval(this.tick);
@@ -900,6 +1215,7 @@ class Game {
         this.local.tfInputs[t.dataset.cat] = t.value.slice(0,24);
         this.tfQueueDraft();
       }
+      else if(t.dataset.role === 'd-guess-input'){ this.local.dGuessDraft = t.value.slice(0,40); }
     });
     document.body.addEventListener('keydown', e=>{
       const t = e.target;
@@ -920,6 +1236,7 @@ class Game {
         if(i < n-1){ const next = this.root.querySelector(`[data-role="tf-input"][data-index="${i+1}"]`); if(next) next.focus(); }
         else this.tfPressStop();
       }
+      if(t.dataset.role === 'd-guess-input' && e.key==='Enter'){ e.preventDefault(); this.dSendGuess(); }
     });
   }
   patchWordMeta(){
@@ -996,11 +1313,32 @@ class Game {
       tfToggleHard: ()=>{ this.tfDraft.hard = !this.tfDraft.hard; this.renderScreen(); },
       tfPressStop: ()=>this.tfPressStop(),
       tfFlag: (t)=>{ this.tfToggleFlag(t.dataset.cat, t.dataset.pid); },
+      dSetRounds: (t)=>{ this.dDraft.rounds = Number(t.dataset.val); this.renderScreen(); },
+      dSetChooseTime: (t)=>{ this.dDraft.chooseTime = Number(t.dataset.val); this.renderScreen(); },
+      dSetDrawTime: (t)=>{ this.dDraft.drawTime = Number(t.dataset.val); this.renderScreen(); },
+      dToggleHints: ()=>{ this.dDraft.hints = !this.dDraft.hints; this.renderScreen(); },
+      dToggleCategory: (t)=>{
+        const id = t.dataset.cat;
+        const i = this.dDraft.categories.indexOf(id);
+        if(i>=0) this.dDraft.categories.splice(i,1); else this.dDraft.categories.push(id);
+        this.renderScreen();
+      },
+      dChooseOption: (t)=>{
+        const i = Number(t.dataset.i);
+        const opt = this.local.dOptions && this.local.dOptions[i];
+        if(opt) this.dChooseWord(opt.word, opt.category);
+      },
+      dSendGuess: ()=>this.dSendGuess(),
+      dClearCanvas: ()=>this.dClearCanvas(),
+      dSetColor: (t)=>{ this.local.dColor = t.dataset.color; this.local.dTool='brush'; this.dPatchToolbar(); },
+      dSetSize: (t)=>{ this.local.dSize = Number(t.dataset.size); this.dPatchToolbar(); },
+      dSetTool: (t)=>{ this.local.dTool = t.dataset.tool; this.dPatchToolbar(); },
       submitNow: ()=>this.submit(false),
       revealAll: ()=>{ clearInterval(this.revealTick); this.local.reveal = this.groups(this.state.g.round).length; this.renderScreen(); },
       goScore: ()=>{ this.local.screen='score'; this.local.selPid=this.myId; this.renderScreen(); },
       goRanking: ()=>{
-        this.local.screen = this.state.gameId==='tuttifrutti' ? 'tfRanking' : 'ranking';
+        const map = {unanimo:'ranking', tuttifrutti:'tfRanking', dibujalo:'dRanking'};
+        this.local.screen = map[this.state.gameId] || 'ranking';
         this.local.rankPhase=0; this.renderScreen();
         this.later(()=>{ this.local.rankPhase=1; this.renderScreen(); },900);
       },
@@ -1043,6 +1381,11 @@ class Game {
     else if(sc==='tfReview') html = this.viewTfReview();
     else if(sc==='tfRanking') html = this.viewTfRanking();
     else if(sc==='tfFinal') html = this.viewTfFinal();
+    else if(sc==='dChoose') html = this.viewDChoose();
+    else if(sc==='dDraw') html = this.viewDDraw();
+    else if(sc==='dReveal') html = this.viewDReveal();
+    else if(sc==='dRanking') html = this.viewDRanking();
+    else if(sc==='dFinal') html = this.viewDFinal();
     else html = this.viewHome();
 
     this.root.innerHTML = html;
@@ -1058,6 +1401,16 @@ class Game {
       this.later(()=>{ const el=this.root.querySelector('[data-role="tf-input"][data-index="0"]'); if(el) el.focus({preventScroll:true}); }, 50);
       const left = this.state ? Math.max(0, Math.round((this.state.g.roundEndAt - Date.now())/1000)) : 0;
       this.tfPatchTimer(left);
+    }
+    if(sc==='dDraw'){
+      if(this._dCleanup) this._dCleanup();
+      this.dSetupCanvas();
+      const left = this.state ? Math.max(0, Math.round((this.state.g.drawEndAt - Date.now())/1000)) : 0;
+      this.dPatchTimer(left);
+    }
+    if(sc==='dChoose'){
+      const left = this.state ? Math.max(0, Math.round((this.state.g.chooseEndAt - Date.now())/1000)) : 0;
+      this.dPatchTimer(left);
     }
   }
 
@@ -1536,6 +1889,282 @@ class Game {
       uniqueTop && uniqueTop[1]>0 && {label:'Más respuestas únicas', value:(byId[uniqueTop[0]]?.name||'?'), sub:uniqueTop[1]+' únicas (+10 c/u)', bg:VIOLET},
       sharedTop && sharedTop[1]>0 && {label:'Más respuestas coincidentes', value:(byId[sharedTop[0]]?.name||'?'), sub:sharedTop[1]+' compartidas', bg:MINT},
       stopTop && stopTop[1]>0 && {label:'Más veces gritó STOP', value:(byId[stopTop[0]]?.name||'?'), sub:stopTop[1]+' rondas', bg:BLUE},
+    ].filter(Boolean).map((x,i)=>({...x, delay:(0.5+i*0.1)+'s'}));
+    const statsHtml = stats.map(x=>`<div style="background:${x.bg};border:2px solid ${INK};border-radius:22px;box-shadow:0 4px 0 ${INK};padding:16px;display:flex;flex-direction:column;gap:6px;animation:rise .5s both;animation-delay:${x.delay}">
+      <div style="font-size:12px;font-weight:800;letter-spacing:.1em;text-transform:uppercase">${esc(x.label)}</div>
+      <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:26px;line-height:1.05;overflow-wrap:anywhere">${esc(x.value)}</div>
+      <div style="font-size:14px;font-weight:700">${esc(x.sub)}</div>
+    </div>`).join('');
+    const confettiHtml = this.confetti.map(c=>`<div style="position:absolute;top:-20px;left:${c.left};width:${c.w};height:${c.h};border-radius:3px;background:${c.color};border:1.5px solid ${INK};animation:fall ${c.dur} linear ${c.delay} infinite"></div>`).join('');
+    const bottom = this.isHost
+      ? `<button class="btn-primary" data-action="playAgain">JUGAR DE NUEVO</button><button class="btn-secondary" data-action="backToPortal">ELEGIR OTRO JUEGO</button>`
+      : `<div style="height:54px;border-radius:16px;border:2px solid ${INK};background:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;color:var(--muted)">Esperando a ${esc(this.playerById(s.hostId)?.name||'el anfitrión')}…</div>`;
+    return `<div style="position:relative;min-height:100vh;overflow:hidden">
+      <div style="position:fixed;inset:0;pointer-events:none;z-index:1;overflow:hidden">${confettiHtml}</div>
+      <div style="position:relative;z-index:2;max-width:1080px;margin:0 auto;padding:28px 20px 0;display:flex;flex-direction:column;gap:28px">
+        <div style="display:flex;flex-direction:column;align-items:center;gap:8px;text-align:center">
+          <div style="padding:8px 16px;border-radius:999px;background:${INK};color:var(--cream);font-size:14px;font-weight:800;letter-spacing:.12em">¡PARTIDA TERMINADA!</div>
+          <div class="heading" style="font-size:clamp(40px,12vw,84px);line-height:.95;letter-spacing:-.03em;animation:pop .7s cubic-bezier(.3,1.6,.5,1) both">${esc(winnerTitle)}</div>
+          <div class="heading" style="font-size:24px">${tot[w.id]} puntos</div>
+        </div>
+        <div style="display:flex;align-items:flex-end;justify-content:center;gap:10px">${podium}</div>
+        <div style="display:flex;flex-wrap:wrap;gap:20px;align-items:flex-start;margin-top:-28px">
+          <div style="flex:1 1 320px;min-width:0;background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:8px 18px">${finalRows}</div>
+          <div style="flex:1 1 420px;min-width:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px">${statsHtml}</div>
+        </div>
+        <div class="sticky-bottom">
+          <div style="max-width:520px;margin:0 auto;display:flex;flex-direction:column;gap:12px">${bottom}</div>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  /* ================= DIBUJALO — screens ================= */
+  viewDibujaloConfig(){
+    const cfg = this.dDraft;
+    const roundOpts = [3,4,5,6,8,10].map(n=>`<button data-action="dSetRounds" data-val="${n}" style="height:48px;border-radius:14px;border:2px solid ${INK};background:${cfg.rounds===n?INK:'#fff'};color:${cfg.rounds===n?'var(--cream)':INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:18px">${n}</button>`).join('');
+    const chooseOpts = [8,10,15,20].map(n=>`<button data-action="dSetChooseTime" data-val="${n}" style="height:44px;border-radius:14px;border:2px solid ${INK};background:${cfg.chooseTime===n?INK:'#fff'};color:${cfg.chooseTime===n?'var(--cream)':INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:16px">${n}s</button>`).join('');
+    const drawOpts = [40,60,80,100].map(n=>`<button data-action="dSetDrawTime" data-val="${n}" style="height:44px;border-radius:14px;border:2px solid ${INK};background:${cfg.drawTime===n?INK:'#fff'};color:${cfg.drawTime===n?'var(--cream)':INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:16px">${n}s</button>`).join('');
+    const catChips = Object.keys(DIBUJALO_BANK).map(cat=>{
+      const on = cfg.categories.includes(cat);
+      return `<button data-action="dToggleCategory" data-cat="${cat}" style="padding:10px 14px;border-radius:14px;border:2px solid ${INK};background:${on?MINT:'#fff'};font-weight:800;font-size:14px">${esc(cat)}</button>`;
+    }).join('');
+    const estimate = '≈ '+Math.max(1,Math.round(cfg.rounds*(cfg.drawTime+cfg.chooseTime+15)/60))+' min de juego';
+    return `<div class="screen screen-narrow">
+      <div class="top-bar"><button class="icon-btn" data-action="backToPicker" aria-label="Volver">${this.iconBack()}</button><div class="heading" style="font-size:28px">Dibujalo</div></div>
+      <div style="background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:6px 18px;display:flex;flex-direction:column">
+        <div style="display:flex;flex-direction:column;gap:10px;padding:14px 0;border-bottom:2px solid var(--panel-line)">
+          <div style="font-weight:800;font-size:17px">Rondas</div>
+          <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:6px">${roundOpts}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:10px;padding:14px 0;border-bottom:2px solid var(--panel-line)">
+          <div style="font-weight:800;font-size:17px">Tiempo para elegir palabra</div>
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px">${chooseOpts}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:10px;padding:14px 0;border-bottom:2px solid var(--panel-line)">
+          <div style="font-weight:800;font-size:17px">Tiempo para dibujar</div>
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px">${drawOpts}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:10px;padding:14px 0;border-bottom:2px solid var(--panel-line)">
+          <div style="font-weight:800;font-size:17px">Categorías</div>
+          <div style="display:flex;flex-wrap:wrap;gap:8px">${catChips}</div>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 0">
+          <div style="display:flex;flex-direction:column;gap:2px"><div style="font-weight:800;font-size:17px">Pistas</div><div style="font-size:14px;color:var(--muted)">Revela la categoría a los 30s si nadie adivinó</div></div>
+          <button data-action="dToggleHints" style="width:56px;height:32px;border-radius:999px;border:2px solid ${INK};background:${cfg.hints?MINT:'#F1E7D8'};position:relative;flex:0 0 auto"><span style="position:absolute;top:2px;left:${cfg.hints?'26px':'2px'};width:24px;height:24px;border-radius:50%;background:#fff;border:2px solid ${INK};transition:left .15s"></span></button>
+        </div>
+      </div>
+      <div class="sticky-bottom">
+        <div style="text-align:center;font-size:14px;font-weight:700;color:var(--muted)">${estimate}</div>
+        <button class="btn-primary" data-action="confirmDibujaloConfig">LISTO, VOLVER AL LOBBY</button>
+      </div>
+    </div>`;
+  }
+
+  viewDChoose(){
+    const s = this.state, pl = this.players(), drawerId = s.g.drawerOf[s.g.round];
+    const drawer = this.playerById(drawerId);
+    const isMe = drawerId === this.myId;
+    const timerChip = `<div data-el="dTimerBox" style="display:flex;align-items:center;gap:8px;height:50px;padding:0 16px;border-radius:999px;border:2px solid ${INK};background:#fff;box-shadow:0 3px 0 ${INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:26px">${this.iconClock()}<span data-el="dTimerText">${mmss(this.state.gameConfig.chooseTime)}</span></div>`;
+    if(!isMe){
+      return `<div style="min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;text-align:center;padding:20px">
+        <div style="width:64px;height:64px;flex:0 0 auto">${avatarSVG(drawer&&drawer.avatar,64)}</div>
+        <div class="heading" style="font-size:22px">🎨 ${esc(drawer?drawer.name.toUpperCase():'?')} ESTÁ ELIGIENDO...</div>
+        ${timerChip}
+      </div>`;
+    }
+    const opts = this.local.dOptions;
+    if(!opts){
+      return `<div style="min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;text-align:center;padding:20px"><div class="spinner"></div><div style="font-weight:700;color:var(--muted)">Preparando tus opciones…</div></div>`;
+    }
+    const cards = opts.map((o,i)=>`<button data-action="dChooseOption" data-i="${i}" style="display:flex;flex-direction:column;align-items:center;gap:8px;padding:20px 14px;border-radius:22px;background:#fff;border:2.5px solid ${INK};box-shadow:0 5px 0 ${INK};transition:transform .08s,box-shadow .08s" style-active="transform:translateY(4px);box-shadow:0 1px 0 ${INK}">
+      <div style="font-size:40px">${o.emoji||'🎨'}</div>
+      <div class="heading" style="font-size:20px;text-align:center">${esc(o.word.toUpperCase())}</div>
+      <div style="font-size:12px;font-weight:700;color:var(--muted)">${esc(o.category)}</div>
+    </button>`).join('');
+    return `<div class="screen screen-narrow">
+      <div style="display:flex;flex-direction:column;align-items:center;gap:8px;text-align:center;padding-top:10px">
+        <div style="font-size:14px;font-weight:800;letter-spacing:.1em;text-transform:uppercase">🎨 Elegí qué dibujar</div>
+        ${timerChip}
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px">${cards}</div>
+    </div>`;
+  }
+
+  viewDDraw(){
+    const s = this.state, cfg = s.gameConfig, pl = this.players();
+    const r = s.g.round;
+    const drawerId = s.g.drawerOf[r];
+    const isMe = drawerId === this.myId;
+    const drawer = this.playerById(drawerId);
+    const already = (s.g.correctOrder[r]||[]).some(e=>e.id===this.myId);
+    const guessersTotal = pl.length-1;
+    const correctCount = (s.g.correctOrder[r]||[]).length;
+    const colors = [INK, CORAL, YEL, MINT, VIOLET, BLUE, PINK, '#fff'];
+    const colorBtns = colors.map(c=>`<button data-action="dSetColor" data-color="${c}" data-el="dColorBtn" aria-label="Color" style="width:30px;height:30px;border-radius:50%;background:${c};border:2px solid ${INK};box-shadow:${c===this.local.dColor&&this.local.dTool==='brush'?`0 0 0 3px #fff, 0 0 0 5px ${INK}`:'none'};flex:0 0 auto"></button>`).join('');
+    const sizeBtns = [3,6,12].map(sz=>`<button data-action="dSetSize" data-size="${sz}" data-el="dSizeBtn" style="width:34px;height:34px;border-radius:10px;border:2px solid ${INK};background:${sz===this.local.dSize?INK:'#fff'};color:${sz===this.local.dSize?'var(--cream)':INK};display:flex;align-items:center;justify-content:center"><span style="width:${sz}px;height:${sz}px;border-radius:50%;background:currentColor"></span></button>`).join('');
+    const hintChip = (s.g.hintUsed[r] && !isMe) ? `<div style="padding:6px 14px;border-radius:999px;background:${YEL};border:2px solid ${INK};font-weight:800;font-size:13px">💡 ${esc(s.g.category[r]||'')}</div>` : '';
+    const toolbar = isMe ? `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px;background:#fff;border:2px solid ${INK};border-radius:16px">
+        <div style="display:flex;gap:6px;flex-wrap:wrap">${colorBtns}</div>
+        <div style="width:2px;height:24px;background:var(--line)"></div>
+        <div style="display:flex;gap:6px">${sizeBtns}</div>
+        <div style="width:2px;height:24px;background:var(--line)"></div>
+        <button data-action="dSetTool" data-tool="eraser" data-el="dEraserBtn" style="height:34px;padding:0 12px;border-radius:10px;border:2px solid ${INK};background:${this.local.dTool==='eraser'?INK:'#fff'};color:${this.local.dTool==='eraser'?'var(--cream)':INK};font-weight:800;font-size:13px">🧽</button>
+        <button data-action="dClearCanvas" style="height:34px;padding:0 12px;border-radius:10px;border:2px solid ${INK};background:#fff;font-weight:800;font-size:13px">🗑️</button>
+      </div>` : '';
+    const guessArea = isMe
+      ? `<div style="text-align:center;font-size:13px;font-weight:700;color:var(--muted)">Mirá cómo va la adivinanza mientras dibujás 👀</div>`
+      : already
+        ? `<div style="display:flex;align-items:center;justify-content:center;gap:8px;height:52px;border-radius:16px;background:${MINT};border:2px solid ${INK};font-weight:800;font-size:16px">✓ ¡ACERTASTE!</div>`
+        : `<div style="display:flex;gap:8px">
+            <input data-role="d-guess-input" value="${esc(this.local.dGuessDraft)}" placeholder="¿Qué es?" autocomplete="off" style="flex:1;min-width:0;height:52px;border-radius:16px;border:2px solid ${INK};background:#fff;padding:0 16px;font-size:17px;font-weight:700;color:${INK};outline:none">
+            <button data-action="dSendGuess" style="flex:0 0 auto;height:52px;padding:0 22px;border-radius:16px;border:2px solid ${INK};background:${CORAL};font-weight:800;font-size:16px">ADIVINAR</button>
+          </div>`;
+    return `<div style="min-height:100vh;display:flex;flex-direction:column">
+      <div style="position:sticky;top:0;z-index:10;background:var(--cream)">
+        <div style="max-width:1080px;margin:0 auto;padding:12px 20px;display:flex;align-items:center;gap:12px">
+          <button class="icon-btn" data-action="askLeave" aria-label="Salir">${this.iconClose()}</button>
+          <div style="flex:1;min-width:0;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:18px">${isMe?'🎨 Estás dibujando':'🎨 '+esc(drawer?drawer.name:'?')+' está dibujando'}</div>
+          <div data-el="dTimerBox" style="display:flex;align-items:center;gap:8px;height:46px;padding:0 14px;border-radius:999px;border:2px solid ${INK};background:#fff;box-shadow:0 3px 0 ${INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:22px">${this.iconClock()}<span data-el="dTimerText">${mmss(cfg.drawTime)}</span></div>
+        </div>
+      </div>
+      <div style="flex:1;width:100%;max-width:1080px;margin:0 auto;padding:16px 20px 20px;display:flex;flex-wrap:wrap;gap:18px;align-items:flex-start">
+        <div style="flex:1 1 420px;min-width:0;display:flex;flex-direction:column;gap:10px">
+          ${isMe?`<div style="background:${YEL};border:2px solid ${INK};border-radius:16px;padding:10px 14px;text-align:center"><span style="font-weight:800;font-size:15px">TU PALABRA ES: ${esc((this.local.dChosenWord||'').toUpperCase())}</span><div style="font-size:12px;font-weight:700;color:var(--muted)">No la muestres.</div></div>`:''}
+          ${hintChip}
+          <canvas id="dCanvas" width="640" height="440" style="width:100%;height:auto;aspect-ratio:640/440;background:#fff;border:2.5px solid ${INK};border-radius:20px;box-shadow:0 5px 0 ${INK};cursor:${isMe?'crosshair':'default'}"></canvas>
+          ${toolbar}
+        </div>
+        <div style="flex:1 1 280px;min-width:0;display:flex;flex-direction:column;gap:10px">
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:0 4px">
+            <div class="heading" style="font-size:17px">Adivinanzas</div>
+            <div style="font-size:14px;font-weight:800;color:var(--muted)"><span data-el="dCorrectCount">${correctCount} / ${guessersTotal}</span> acertaron</div>
+          </div>
+          <div class="card" style="padding:10px 14px">${this.dGuessFeedHtml()}</div>
+          ${guessArea}
+        </div>
+      </div>
+    </div>`;
+  }
+
+  viewDReveal(){
+    const s = this.state, r = s.g.round, pl = this.players(), byId={}; pl.forEach(p=>byId[p.id]=p);
+    const drawerId = s.g.drawerOf[r];
+    const pts = this.dPoints(r);
+    const order = s.g.correctOrder[r]||[];
+    const nobodyGuessed = order.length===0;
+    const rows = pl.slice().sort((a,b)=>(pts[b.id]||0)-(pts[a.id]||0)).map((p,i)=>{
+      const rankIdx = order.findIndex(e=>e.id===p.id);
+      const tag = p.id===drawerId ? 'Dibujante' : rankIdx>=0 ? (rankIdx+1)+'.º en adivinar' : 'No adivinó';
+      return `<div style="display:flex;align-items:center;gap:12px;padding:10px 16px;border-radius:18px;background:#fff;border:2px solid ${INK}">
+        <div style="width:38px;height:38px;flex:0 0 auto">${avatarSVG(p.avatar,38)}</div>
+        <div style="flex:1;min-width:0"><div style="font-weight:800;font-size:16px">${esc(p.name)}</div><div style="font-size:12px;font-weight:700;color:var(--muted)">${tag}</div></div>
+        <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:20px">+${pts[p.id]||0}</div>
+      </div>`;
+    }).join('');
+    const bottom = this.isHost
+      ? `<button class="btn-primary" data-action="goRanking">VER PUNTOS</button>`
+      : `<div style="height:54px;border-radius:16px;border:2px solid ${INK};background:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;color:var(--muted)">Esperando al anfitrión…</div>`;
+    return `<div class="screen screen-narrow">
+      <div style="display:flex;flex-direction:column;align-items:center;gap:10px;text-align:center">
+        <div style="font-size:14px;font-weight:800;letter-spacing:.14em;text-transform:uppercase">${nobodyGuessed?'😭 NADIE LO ADIVINÓ':'🎉 ¡SE ACABÓ LA RONDA!'}</div>
+        <div style="font-size:13px;font-weight:700;color:var(--muted)">LA PALABRA ERA</div>
+        <div style="padding:10px 26px;border-radius:20px;background:${YEL};border:2.5px solid ${INK};box-shadow:0 5px 0 ${INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:clamp(32px,9vw,48px)">${esc((s.g.word[r]||'').toUpperCase())}</div>
+        ${nobodyGuessed?`<div style="font-size:14px;font-weight:700;color:var(--muted);font-style:italic">${esc(dibujaloFunnyLine())}</div>`:''}
+      </div>
+      ${this.local.dFinalImage?`<img src="${this.local.dFinalImage}" style="width:100%;border-radius:20px;border:2.5px solid ${INK};box-shadow:0 5px 0 ${INK}">`:''}
+      <div style="display:flex;flex-direction:column;gap:8px">${rows}</div>
+      <div class="sticky-bottom">${bottom}</div>
+    </div>`;
+  }
+
+  viewDRanking(){
+    const s = this.state, cfg = s.gameConfig, pl = this.players();
+    const cur = this.dTotals(s.g.round), prevT = s.g.round>0 ? this.dTotals(s.g.round-1) : null;
+    const nr = this.rankOf(cur), orr = prevT ? this.rankOf(prevT) : nr;
+    const ph = this.local.rankPhase===1;
+    const rows = pl.map(p=>{
+      const ni = nr.indexOf(p.id), oi = orr.indexOf(p.id), idx = ph?ni:oi, d = oi-ni;
+      const label = p.id===this.myId ? p.name+' (vos)' : p.name;
+      const total = ph ? cur[p.id] : (prevT ? prevT[p.id] : 0);
+      const bg = p.id===this.myId ? '#FFEDE6' : (idx===0 && ph ? '#FFF3CC' : '#fff');
+      const deltaText = d>0?'▲ Subió '+d : d<0?'▼ Bajó '+(-d) : 'Mantiene el puesto';
+      const deltaColor = d>0?'#0E8A66':d<0?'#B3341A':'var(--muted)';
+      return `<div style="position:absolute;left:0;right:0;top:${idx*86}px;height:72px;display:flex;align-items:center;gap:12px;padding:0 16px 0 10px;border-radius:22px;background:${bg};border:2px solid ${INK};box-shadow:0 4px 0 ${INK};transition:top .9s cubic-bezier(.34,1.45,.64,1)">
+        <div style="flex:0 0 auto;width:44px;text-align:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:32px">${idx+1}</div>
+        <div style="width:46px;height:46px;flex:0 0 auto">${avatarSVG(p.avatar,46)}</div>
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
+          <div style="font-weight:800;font-size:18px">${esc(label)}</div>
+          ${ph?`<div style="font-size:13px;font-weight:800;color:${deltaColor};animation:rise .3s both">${deltaText}</div>`:''}
+        </div>
+        ${ph?`<div style="padding:4px 10px;border-radius:999px;background:${MINT};border:2px solid ${INK};font-weight:800;font-size:14px;animation:pop .4s both">+${cur[p.id]-(prevT?prevT[p.id]:0)}</div>`:''}
+        <div style="flex:0 0 auto;min-width:72px;text-align:right;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:24px">${total} pts</div>
+      </div>`;
+    }).join('');
+    const dots = Array.from({length:cfg.rounds},(_,i)=>`<div style="width:${i===s.g.round?'36px':'14px'};height:10px;border-radius:999px;background:${i<=s.g.round?INK:'#fff'};border:2px solid ${INK};transition:width .3s"></div>`).join('');
+    const isLast = s.g.round+1 >= cfg.rounds;
+    const bottom = this.isHost
+      ? `<button class="btn-primary" data-action="nextRound">${isLast?'VER RESULTADO FINAL':'SIGUIENTE DIBUJANTE'}</button>`
+      : `<div style="height:62px;border-radius:18px;border:2px solid ${INK};background:#fff;display:flex;align-items:center;justify-content:center;gap:10px;font-weight:800;font-size:17px">${esc(this.playerById(s.hostId)?.name||'El anfitrión')} va a continuar<span style="display:flex;gap:3px"><span style="animation:blink 1.2s infinite">•</span><span style="animation:blink 1.2s .2s infinite">•</span><span style="animation:blink 1.2s .4s infinite">•</span></span></div>`;
+    return `<div class="screen">
+      <div style="display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center">
+        <div class="heading" style="font-size:clamp(36px,10vw,52px);letter-spacing:-.02em;line-height:1">CLASIFICACIÓN</div>
+        <div style="font-size:16px;font-weight:700;color:var(--muted)">Después de la ronda ${s.g.round+1} de ${cfg.rounds}</div>
+      </div>
+      <div style="display:flex;gap:6px;justify-content:center">${dots}</div>
+      <div style="position:relative;height:${pl.length*86}px">${rows}</div>
+      <div class="sticky-bottom">${bottom}</div>
+    </div>`;
+  }
+
+  viewDFinal(){
+    const s = this.state, cfg = s.gameConfig, pl = this.players(), byId = {}; pl.forEach(p=>byId[p.id]=p);
+    const tot = this.dTotals(cfg.rounds-1);
+    const nr = this.rankOf(tot);
+    const w = byId[nr[0]];
+    const winnerTitle = w.id===this.myId ? '¡GANASTE, '+w.name.toUpperCase()+'!' : w.name.toUpperCase()+' GANÓ';
+    const pod = [1,0,2].filter(i=>nr[i]);
+    const H=['170px','124px','92px'], PBG=[YEL,'#E4DEF5','#F6BE9E'];
+    const podium = pod.map((i)=>{
+      const p = byId[nr[i]];
+      return `<div style="flex:0 1 130px;min-width:0;display:flex;flex-direction:column;align-items:center;gap:8px;animation:rise .6s both;animation-delay:${(0.2+(2-i)*0.15).toFixed(2)}s">
+        <div style="width:${i===0?72:56}px;height:${i===0?72:56}px;flex:0 0 auto">${avatarSVG(p.avatar, i===0?72:56)}</div>
+        <div style="font-weight:800;font-size:16px;text-align:center">${esc(p.name)}</div>
+        <div style="width:100%;height:${H[i]};border-radius:18px 18px 0 0;background:${PBG[i]};border:2.5px solid ${INK};border-bottom:0;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding-top:10px;gap:2px">
+          <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:40px;line-height:1">${i+1}</div>
+          <div style="font-weight:800;font-size:14px">${tot[p.id]} pts</div>
+        </div>
+      </div>`;
+    }).join('');
+    const finalRows = nr.map((id,i)=>{
+      const label = id===this.myId ? byId[id].name+' (vos)' : byId[id].name;
+      return `<div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:${i<nr.length-1?'2px solid var(--panel-line)':'0'}">
+        <div style="width:28px;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:20px">${i+1}</div>
+        <div style="width:38px;height:38px;flex:0 0 auto">${avatarSVG(byId[id].avatar,38)}</div>
+        <div style="flex:1;min-width:0;font-weight:800;font-size:17px">${esc(label)}</div>
+        <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:20px">${tot[id]} pts</div>
+      </div>`;
+    }).join('');
+
+    let bestDrawer={}, fastestGuess=null, hardestRound=null, correctCount={}, failCount={};
+    pl.forEach(p=>{ bestDrawer[p.id]=0; correctCount[p.id]=0; failCount[p.id]=0; });
+    for(let r=0;r<cfg.rounds;r++){
+      const drawerId = s.g.drawerOf[r]; if(drawerId==null) continue;
+      const pts = this.dPoints(r); const order = s.g.correctOrder[r]||[];
+      bestDrawer[drawerId] = (bestDrawer[drawerId]||0) + (pts[drawerId]||0);
+      order.forEach((e)=>{ correctCount[e.id] = (correctCount[e.id]||0)+1; if(!fastestGuess || e.ms<fastestGuess.ms) fastestGuess = {pid:e.id, ms:e.ms, r}; });
+      const guessers = pl.length-1;
+      if(guessers>0 && (!hardestRound || order.length<hardestRound.count)) hardestRound = {word:s.g.word[r], count:order.length, total:guessers, r};
+      if(order.length===0) failCount[drawerId] = (failCount[drawerId]||0)+1;
+    }
+    const topBy = (obj)=>Object.entries(obj).sort((a,b)=>b[1]-a[1])[0];
+    const drawerTop = topBy(bestDrawer), correctTop = topBy(correctCount), failTop = topBy(failCount);
+    const stats = [
+      drawerTop && drawerTop[1]>0 && {label:'Mejor dibujante', value:(byId[drawerTop[0]]?.name||'?'), sub:'+'+drawerTop[1]+' pts dibujando', bg:CORAL},
+      fastestGuess && {label:'Adivinador más rápido', value:(byId[fastestGuess.pid]?.name||'?'), sub:(fastestGuess.ms/1000).toFixed(1)+'s · Ronda '+(fastestGuess.r+1), bg:YEL},
+      hardestRound && {label:'Dibujo más difícil', value:(hardestRound.word||'?').toUpperCase(), sub:hardestRound.count+' de '+hardestRound.total+' adivinaron', bg:VIOLET},
+      correctTop && correctTop[1]>0 && {label:'Mayor cantidad de aciertos', value:(byId[correctTop[0]]?.name||'?'), sub:correctTop[1]+' rondas adivinadas', bg:MINT},
+      failTop && failTop[1]>0 && {label:'Nadie le entendió los dibujos', value:(byId[failTop[0]]?.name||'?'), sub:failTop[1]+' ronda(s) sin aciertos', bg:BLUE},
     ].filter(Boolean).map((x,i)=>({...x, delay:(0.5+i*0.1)+'s'}));
     const statsHtml = stats.map(x=>`<div style="background:${x.bg};border:2px solid ${INK};border-radius:22px;box-shadow:0 4px 0 ${INK};padding:16px;display:flex;flex-direction:column;gap:6px;animation:rise .5s both;animation-delay:${x.delay}">
       <div style="font-size:12px;font-weight:800;letter-spacing:.1em;text-transform:uppercase">${esc(x.label)}</div>
