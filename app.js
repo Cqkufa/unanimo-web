@@ -99,11 +99,20 @@ const LS_KEY = 'unanimo:session';
 /* ---------- game registry: the portal picks from these, room stays the
    same across games (code, players, avatars persist) ---------- */
 const GAMES = [
-  {id:'unanimo', name:'Unánimo', tagline:'Pensá como los demás', letters:['U','N'], colors:[CORAL,VIOLET], min:2},
-  {id:'dibujalo', name:'Dibujalo', tagline:'Dibujá y adiviná contrarreloj', letters:['D','I'], colors:[BLUE,YEL], min:3},
-  {id:'tuttifrutti', name:'Tutti Frutti', tagline:'Una palabra por categoría, misma letra', letters:['T','F'], colors:[MINT,PINK], min:2},
+  {id:'unanimo', name:'Unánimo', tagline:'Pensá como los demás. Sumás por cada palabra que coincide.', letters:['U','N'], colors:[CORAL,VIOLET], min:2, max:8, isNew:false},
+  {id:'dibujalo', name:'Dibujalo', tagline:'Uno dibuja, el resto adivina en tiempo real contrarreloj.', letters:['D','I'], colors:[BLUE,YEL], min:3, max:10, isNew:true},
+  {id:'tuttifrutti', name:'Tutti Frutti', tagline:'Una letra, varias categorías y un solo grito: ¡STOP!', letters:['T','F'], colors:[MINT,PINK], min:2, max:8, isNew:true},
 ];
 function gameMeta(id){ return GAMES.find(g=>g.id===id); }
+// Same formulas each config screen uses for its own live estimate, applied
+// to the default settings — shown on the picker card before anyone's
+// customized anything for this room.
+function gameEstimateMinutes(gameId){
+  if(gameId==='unanimo') return Math.max(1,Math.round(3*(45+35)/60));
+  if(gameId==='dibujalo') return Math.max(1,Math.round(6*(60+10+15)/60));
+  if(gameId==='tuttifrutti') return Math.max(1,Math.round(5*(60+40)/60));
+  return 5;
+}
 
 /* ---------- sound (synthesized, no audio files needed) ---------- */
 let audioCtx = null;
@@ -1547,16 +1556,8 @@ class Game {
     const letters = ['R','O','N','D','A'];
     const colors = [CORAL,VIOLET,YEL,MINT,BLUE];
     const rots = [-6,4,-4,5,-3];
-    const gameCards = GAMES.map((g,i)=>`
-      <button data-action="pickGameFromHome" data-game="${g.id}" style="display:flex;align-items:center;gap:14px;width:100%;padding:14px 16px;border-radius:22px;background:#fff;border:2.5px solid ${INK};box-shadow:0 4px 0 ${INK};text-align:left;transition:transform .08s,box-shadow .08s;animation:rise .5s both;animation-delay:${(0.15+i*0.08).toFixed(2)}s" style-active="transform:translateY(3px);box-shadow:0 1px 0 ${INK}">
-        <div style="display:flex;gap:4px;flex:0 0 auto">
-          <div style="width:38px;height:46px;border-radius:12px;background:${g.colors[0]};border:2px solid ${INK};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:20px;transform:rotate(-4deg)">${g.letters[0]}</div>
-          <div style="width:38px;height:46px;border-radius:12px;background:${g.colors[1]};border:2px solid ${INK};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:20px;transform:rotate(4deg)">${g.letters[1]}</div>
-        </div>
-        <div style="flex:1;min-width:0"><div class="heading" style="font-size:19px">${esc(g.name)}</div><div style="font-size:13px;font-weight:600;color:var(--muted)">${esc(g.tagline)}</div></div>
-        <div style="flex:0 0 auto;font-size:20px">▶</div>
-      </button>`).join('');
-    return `<div class="screen screen-narrow" style="position:relative;overflow:hidden">
+    const gameCards = GAMES.map((g,i)=>this.gameCardHtml(g, 'pickGameFromHome', (0.15+i*0.08).toFixed(2)+'s')).join('');
+    return `<div class="screen" style="position:relative;overflow:hidden">
       <div style="position:absolute;inset:0;pointer-events:none;z-index:0">
         <div style="position:absolute;top:2%;left:2%;animation:float 5s ease-in-out infinite"><div style="padding:9px 16px;border-radius:18px 18px 18px 4px;background:${CORAL};border:2px solid ${INK};font-weight:800;font-size:16px;transform:rotate(-8deg)">Che</div></div>
         <div style="position:absolute;top:4%;right:2%;animation:float 6s ease-in-out .8s infinite"><div style="padding:9px 16px;border-radius:18px 18px 4px 18px;background:#fff;border:2px solid ${INK};font-weight:800;font-size:16px;transform:rotate(6deg)">Dale</div></div>
@@ -1567,9 +1568,9 @@ class Game {
         </div>
         <div class="heading" style="font-size:clamp(20px,5.5vw,26px);text-align:center;animation:rise .5s .4s both">Party games para jugar con amigos.</div>
       </div>
-      <div style="position:relative;z-index:1;display:flex;flex-direction:column;gap:10px;padding-top:22px">
+      <div style="position:relative;z-index:1;display:flex;flex-direction:column;gap:12px;padding-top:22px">
         <div style="font-size:13px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);padding:0 4px">Elegí un juego para arrancar</div>
-        ${gameCards}
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px">${gameCards}</div>
       </div>
       <div style="position:relative;z-index:1;width:100%;display:flex;flex-direction:column;gap:14px;padding-top:22px;padding-bottom:24px">
         <div style="display:flex;flex-direction:column;gap:8px;padding:14px;border-radius:20px;background:#fff;border:2px solid var(--line)">
@@ -1677,19 +1678,31 @@ class Game {
     return items.map(t=>`<div style="padding:8px 14px;border-radius:999px;background:#fff;border:2px solid var(--line);font-size:14px;font-weight:700">${esc(t)}</div>`).join('');
   }
 
+  // Shared big-card design used both on the home screen and the in-lobby
+  // picker, so "pick a game" always looks the same everywhere in the app.
+  gameCardHtml(g, actionName, delay){
+    const est = gameEstimateMinutes(g.id);
+    return `<button data-action="${actionName}" data-game="${g.id}" style="position:relative;display:flex;flex-direction:column;gap:12px;padding:20px;border-radius:24px;background:#fff;border:2.5px solid ${INK};box-shadow:0 5px 0 ${INK};text-align:left;transition:transform .08s,box-shadow .08s;animation:rise .5s both;animation-delay:${delay||'0s'}" style-active="transform:translateY(4px);box-shadow:0 1px 0 ${INK}">
+      ${g.isNew?`<div style="position:absolute;top:16px;right:16px;padding:5px 12px;border-radius:999px;background:${MINT};border:2px solid ${INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:11px;letter-spacing:.06em">NUEVO</div>`:''}
+      <div style="display:flex;gap:6px">
+        <div style="width:48px;height:58px;border-radius:14px;background:${g.colors[0]};border:2.5px solid ${INK};box-shadow:0 3px 0 ${INK};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:26px;transform:rotate(-4deg)">${g.letters[0]}</div>
+        <div style="width:48px;height:58px;border-radius:14px;background:${g.colors[1]};border:2.5px solid ${INK};box-shadow:0 3px 0 ${INK};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:26px;transform:rotate(4deg)">${g.letters[1]}</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:4px">
+        <div class="heading" style="font-size:24px">${esc(g.name)}</div>
+        <div style="font-size:14px;font-weight:600;color:var(--muted);line-height:1.35">${esc(g.tagline)}</div>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:2px">
+        <div style="display:flex;align-items:center;gap:5px;padding:6px 12px;border-radius:999px;background:var(--cream);border:2px solid var(--line);font-size:13px;font-weight:700">👤 ${g.min}–${g.max} jugadores</div>
+        <div style="display:flex;align-items:center;gap:5px;padding:6px 12px;border-radius:999px;background:var(--cream);border:2px solid var(--line);font-size:13px;font-weight:700">⏱️ ≈ ${est} min</div>
+      </div>
+    </button>`;
+  }
   viewGamePicker(){
-    const cards = GAMES.map(g=>`
-      <button data-action="pickGame" data-game="${g.id}" style="display:flex;align-items:center;gap:14px;width:100%;padding:14px 16px;border-radius:22px;background:#fff;border:2.5px solid ${INK};box-shadow:0 4px 0 ${INK};text-align:left;transition:transform .08s,box-shadow .08s" style-active="transform:translateY(3px);box-shadow:0 1px 0 ${INK}">
-        <div style="display:flex;gap:4px;flex:0 0 auto">
-          <div style="width:40px;height:48px;border-radius:12px;background:${g.colors[0]};border:2px solid ${INK};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:22px;transform:rotate(-4deg)">${g.letters[0]}</div>
-          <div style="width:40px;height:48px;border-radius:12px;background:${g.colors[1]};border:2px solid ${INK};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:22px;transform:rotate(4deg)">${g.letters[1]}</div>
-        </div>
-        <div style="flex:1;min-width:0"><div class="heading" style="font-size:20px">${esc(g.name)}</div><div style="font-size:13px;font-weight:600;color:var(--muted)">${esc(g.tagline)}</div></div>
-        <div style="flex:0 0 auto;font-size:22px">▶</div>
-      </button>`).join('');
+    const cards = GAMES.map((g,i)=>this.gameCardHtml(g, 'pickGame', (i*0.06)+'s')).join('');
     return `<div style="display:flex;flex-direction:column;gap:10px">
       <div style="font-size:13px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);padding:0 4px">¿A qué jugamos?</div>
-      ${cards}
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px">${cards}</div>
     </div>`;
   }
   viewComingSoonConfig(gameId){
