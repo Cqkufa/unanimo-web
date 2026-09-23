@@ -1,5 +1,6 @@
 import { supabase } from './supabaseClient.js';
 import { pickWords } from './words.js';
+import { DIBUJALO_BANK, pickDibujaloTrio, dibujaloFunnyLine, TUTTI_CATEGORIES, pickLetter } from './wordbank.js';
 
 /* ---------- utils ---------- */
 const INK='#1D1B2F', CORAL='#FF6B4A', MINT='#2ED3A6', YEL='#FFC83D', VIOLET='#9B85FF', BLUE='#5CB8FF', PINK='#FF8CC2';
@@ -95,6 +96,15 @@ const clamp = (n,lo,hi) => Math.max(lo,Math.min(hi,n));
 
 const LS_KEY = 'unanimo:session';
 
+/* ---------- game registry: the portal picks from these, room stays the
+   same across games (code, players, avatars persist) ---------- */
+const GAMES = [
+  {id:'unanimo', name:'Unánimo', tagline:'Pensá como los demás', letters:['U','N'], colors:[CORAL,VIOLET], min:2},
+  {id:'dibujalo', name:'Dibujalo', tagline:'Dibujá y adiviná contrarreloj', letters:['D','I'], colors:[BLUE,YEL], min:3},
+  {id:'tuttifrutti', name:'Tutti Frutti', tagline:'Una palabra por categoría, misma letra', letters:['T','F'], colors:[MINT,PINK], min:2},
+];
+function gameMeta(id){ return GAMES.find(g=>g.id===id); }
+
 /* ---------- sound (synthesized, no audio files needed) ---------- */
 let audioCtx = null;
 function ensureAudio(){
@@ -128,8 +138,12 @@ class Game {
     this.local = { screen:'home', modal:null, cfgName:'', joinCode:'', joining:false, joinError:'', showJoinName:false, joinNameDraft:'',
       inputs:[], submitted:false, reveal:0, appliedStage:-1, selPid:null, rankPhase:1, lastRound:-1,
       avatar: randomAvatar(),
-      chatOpen:false, chatUnread:0, chatDraft:'' };
-    this.cfgDraft = { players:8, rounds:3, words:6, time:45 };
+      chatOpen:false, chatUnread:0, chatDraft:'',
+      hostFlow: null, // host-only, LOCAL/unsynced: which game's config screen (if any) the host is looking at from the lobby
+    };
+    this.uDraft = { rounds:3, words:6, time:45 };
+    this.dDraft = { rounds:6, chooseTime:10, drawTime:60, hints:true };
+    this.tfDraft = { rounds:5, time:60, categories:['nombre','animal','pais','comida','objeto','pelicula'], hard:false };
     this.state = null; // host-authoritative shared state, once in a room
     this.toasts = [];
     this.chatMessages = [];
@@ -169,7 +183,7 @@ class Game {
   playerById(id){ return this.players().find(p=>p.id===id); }
   accentColor(p){ const av=(p&&p.avatar)||{}; return FACE_COLORS[av.skin||0] || FACE_COLORS[0]; }
   groups(r){
-    const a = this.state?.answers?.[r]; if(!a) return [];
+    const a = this.state?.g?.answers?.[r]; if(!a) return [];
     const m = {};
     this.players().forEach(p=>{
       (a[p.id]||[]).forEach(w=>{
@@ -182,7 +196,7 @@ class Game {
   }
   points(r){
     const gs = this.groups(r); const byK = {}; gs.forEach(g=>byK[g.key]=g);
-    const a = this.state?.answers?.[r] || {}; const out = {};
+    const a = this.state?.g?.answers?.[r] || {}; const out = {};
     this.players().forEach(p=>{
       const seen = new Set(); const items = [];
       (a[p.id]||[]).forEach(w=>{
@@ -196,7 +210,7 @@ class Game {
   }
   totals(uptoRound){
     const t = {}; this.players().forEach(p=>t[p.id]=0);
-    for(let r=0;r<=uptoRound;r++){ if(!this.state.answers[r]) continue; const pts=this.points(r); for(const id in pts) t[id]=(t[id]||0)+pts[id].total; }
+    for(let r=0;r<=uptoRound;r++){ if(!this.state.g.answers[r]) continue; const pts=this.points(r); for(const id in pts) t[id]=(t[id]||0)+pts[id].total; }
     return t;
   }
   rankOf(t){ return this.players().slice().sort((a,b)=> (t[b.id]||0)-(t[a.id]||0) || a.name.localeCompare(b.name)).map(p=>p.id); }
@@ -226,24 +240,35 @@ class Game {
   }
   clearSession(){ try{ localStorage.removeItem(LS_KEY); }catch(e){} }
 
-  /* ---------- host: create room ---------- */
+  /* ---------- host: create room (game-agnostic — pick a game once you're in the lobby) ---------- */
   async createGame(){
     const name = (this.local.cfgName||'').trim().slice(0,14) || 'Anfitrión';
     this.myId = uid();
     this.isHost = true;
     const code = randCode();
     await this.connect(code);
-    const cfg = { ...this.cfgDraft };
     this.state = {
-      code, hostId:this.myId, config:cfg,
+      code, hostId:this.myId, maxPlayers:12,
       players:[{id:this.myId, name, avatar:{...this.local.avatar}, joinedAt:Date.now()}],
-      phase:'lobby', stage:0, round:-1, roundWord:'', roundEndAt:0, usedWords:[],
-      answers:[], done:{}, rev:0, updatedAt:Date.now()
+      gameId:null, gameConfig:null, g:null,
+      phase:'lobby', stage:0, rev:0, updatedAt:Date.now()
     };
     this.local.appliedStage = 0;
+    this.local.hostFlow = null;
     this.local.screen = 'lobby';
     this.saveSession();
     this.renderScreen();
+    this.broadcastState();
+  }
+
+  /* ---------- host: confirm a game's config from the lobby picker and launch it into the lobby's "ready to start" state ---------- */
+  confirmUnanimoConfig(){
+    if(!this.isHost) return;
+    this.state.gameId = 'unanimo';
+    this.state.gameConfig = { ...this.uDraft };
+    this.state.g = { round:-1, roundWord:'', roundEndAt:0, usedWords:[], answers:[], done:{} };
+    this.state.stage = (this.state.stage||0) + 1;
+    this.local.hostFlow = null;
     this.broadcastState();
   }
 
@@ -287,8 +312,7 @@ class Game {
     if(!this.state) return;
     if(msg.type === 'join'){
       if(this.playerById(msg.id)) { this.broadcastState(); return; }
-      const cap = this.state.config.players;
-      if(this.state.players.length >= cap){ return; }
+      if(this.state.players.length >= (this.state.maxPlayers||12)){ return; }
       const avatar = msg.avatar || randomAvatar();
       this.state.players.push({id:msg.id, name:(msg.name||'Jugador').slice(0,14), avatar, joinedAt:Date.now()});
       // No toast here — every client (host included) announces new joins
@@ -300,20 +324,20 @@ class Game {
       this.broadcastState();
     }
     else if(msg.type === 'submit'){
-      if(msg.round !== this.state.round) return;
+      if(msg.round !== this.state.g.round) return;
       // A player is only truly "done" once we hold a real (possibly empty-
       // by-choice) submission for them. The round watchdog force-fills
       // stragglers with [] so the game can move on; that placeholder must
       // NOT block a genuine submission that arrives a little late (slow
       // network, clock drift) from overwriting it — otherwise their real
       // words are silently lost from the reveal.
-      const already = this.state.done[msg.id];
-      const hadRealAnswer = already && (this.state.answers[this.state.round]?.[msg.id]?.length > 0);
+      const already = this.state.g.done[msg.id];
+      const hadRealAnswer = already && (this.state.g.answers[this.state.g.round]?.[msg.id]?.length > 0);
       if(hadRealAnswer) return;
       const wasLate = already;
-      if(!this.state.answers[this.state.round]) this.state.answers[this.state.round] = {};
-      this.state.answers[this.state.round][msg.id] = msg.words;
-      this.state.done[msg.id] = true;
+      if(!this.state.g.answers[this.state.g.round]) this.state.g.answers[this.state.g.round] = {};
+      this.state.g.answers[this.state.g.round][msg.id] = msg.words;
+      this.state.g.done[msg.id] = true;
       const p = this.playerById(msg.id);
       if(p && p.id !== this.myId) this.toast(p.name+' terminó', this.accentColor(p));
       this.broadcastState();
@@ -326,13 +350,13 @@ class Game {
       // exists so the round watchdog has something better than "[]" to
       // fall back to if that player's final submit never arrives at all
       // (e.g. their tab got backgrounded and its timer stopped firing).
-      if(msg.round !== this.state.round) return;
+      if(msg.round !== this.state.g.round) return;
       this.hostDrafts = this.hostDrafts || {};
       this.hostDrafts[msg.id] = msg.words;
     }
     else if(msg.type === 'leave'){
       this.state.players = this.state.players.filter(p=>p.id!==msg.id);
-      delete this.state.done[msg.id];
+      delete this.state.g.done[msg.id];
       this.broadcastState();
     }
   }
@@ -340,7 +364,7 @@ class Game {
   checkAllDone(){
     if(!this.isHost) return;
     if(this.state.phase!=='round') return;
-    if(this.players().every(p=>this.state.done[p.id])){
+    if(this.players().every(p=>this.state.g.done[p.id])){
       this.later(()=>this.hostStartReveal(), 1200);
     }
   }
@@ -377,9 +401,9 @@ class Game {
       this.local.selPid = this.myId;
       this.local.rankPhase = 1;
       if(s.phase === 'round'){
-        this.local.inputs = Array(s.config.words).fill('');
+        this.local.inputs = Array(s.gameConfig.words).fill('');
         this.local.submitted = false;
-        this.local.lastRound = s.round;
+        this.local.lastRound = s.g.round;
         this.startLocalTimer();
       }
       if(s.phase === 'reveal'){
@@ -402,35 +426,35 @@ class Game {
   }
 
   /* ---------- round flow (host drives global stage) ---------- */
-  startGame(){
+  uStartGame(){
     if(!this.isHost) return;
-    this.state.answers = [];
-    this.state.usedWords = [];
+    this.state.g.answers = [];
+    this.state.g.usedWords = [];
     this.hostStartRound(0);
   }
   hostStartRound(r){
-    const [word] = pickWords(1, this.state.usedWords);
-    this.state.usedWords = [...this.state.usedWords, word];
-    this.state.round = r;
-    this.state.roundWord = word;
-    this.state.roundEndAt = Date.now() + this.state.config.time*1000;
-    this.state.done = {};
+    const [word] = pickWords(1, this.state.g.usedWords);
+    this.state.g.usedWords = [...this.state.g.usedWords, word];
+    this.state.g.round = r;
+    this.state.g.roundWord = word;
+    this.state.g.roundEndAt = Date.now() + this.state.gameConfig.time*1000;
+    this.state.g.done = {};
     this.state.phase = 'round';
     this.state.stage = (this.state.stage||0) + 1;
     this.hostDrafts = {};
     this.broadcastState();
     clearInterval(this.hostWatch);
     this.hostWatch = setInterval(()=>{
-      if(!this.isHost || this.state.phase!=='round' || this.state.round!==r) { clearInterval(this.hostWatch); return; }
-      if(Date.now() >= this.state.roundEndAt + 9000){
+      if(!this.isHost || this.state.phase!=='round' || this.state.g.round!==r) { clearInterval(this.hostWatch); return; }
+      if(Date.now() >= this.state.g.roundEndAt + 9000){
         this.players().forEach(p=>{
-          if(this.state.done[p.id]) return;
-          if(!this.state.answers[r]) this.state.answers[r]={};
+          if(this.state.g.done[p.id]) return;
+          if(!this.state.g.answers[r]) this.state.g.answers[r]={};
           // Prefer their last known draft (whatever they'd typed before we
           // lost contact) over an outright empty answer.
           const draft = this.hostDrafts && this.hostDrafts[p.id];
-          this.state.answers[r][p.id] = this.state.answers[r][p.id] || draft || [];
-          this.state.done[p.id] = true;
+          this.state.g.answers[r][p.id] = this.state.g.answers[r][p.id] || draft || [];
+          this.state.g.done[p.id] = true;
         });
         this.broadcastState();
         clearInterval(this.hostWatch);
@@ -445,16 +469,29 @@ class Game {
     this.state.stage = (this.state.stage||0) + 1;
     this.broadcastState();
   }
-  hostNext(){
+  uNext(){
     if(!this.isHost) return;
-    if(this.state.round+1 < this.state.config.rounds){ this.hostStartRound(this.state.round+1); }
+    if(this.state.g.round+1 < this.state.gameConfig.rounds){ this.hostStartRound(this.state.g.round+1); }
     else { this.state.phase='final'; this.state.stage=(this.state.stage||0)+1; this.broadcastState(); }
   }
-  hostPlayAgain(){
+  uPlayAgain(){
     if(!this.isHost) return;
-    this.state.answers = []; this.state.usedWords = []; this.state.round=-1; this.state.done={};
+    this.state.g.answers = []; this.state.g.usedWords = []; this.state.g.round=-1; this.state.g.done={};
     this.state.phase = 'lobby';
     this.state.stage = (this.state.stage||0) + 1;
+    this.broadcastState();
+  }
+  // Host-only: end the active game and return everyone to the portal's
+  // game picker, keeping the same room/code/players/avatars.
+  backToPortal(){
+    if(!this.isHost || !this.state) return;
+    this.clearTimers();
+    this.state.gameId = null;
+    this.state.gameConfig = null;
+    this.state.g = null;
+    this.state.phase = 'lobby';
+    this.state.stage = (this.state.stage||0) + 1;
+    this.local.hostFlow = null;
     this.broadcastState();
   }
 
@@ -463,14 +500,14 @@ class Game {
     clearInterval(this.tick);
     this.tick = setInterval(()=>{
       if(this.local.screen!=='round'){ clearInterval(this.tick); return; }
-      const left = Math.max(0, Math.round((this.state.roundEndAt - Date.now())/1000));
+      const left = Math.max(0, Math.round((this.state.g.roundEndAt - Date.now())/1000));
       this.patchTimer(left);
       if(left<=0){ clearInterval(this.tick); if(!this.local.submitted) this.submit(true); }
       if(left===10) this.toast('¡Quedan 10 segundos!', CORAL);
     }, 500);
   }
   patchTimer(left){
-    const cfg = this.state.config;
+    const cfg = this.state.gameConfig;
     const textEl = this.root.querySelector('[data-el="timerText"]');
     const barEl = this.root.querySelector('[data-el="timerBar"]');
     const boxEl = this.root.querySelector('[data-el="timerBox"]');
@@ -496,13 +533,13 @@ class Game {
     clearInterval(this.tick);
     if(auto) this.toast('¡Se acabó el tiempo!', CORAL);
     if(this.isHost){
-      if(!this.state.answers[this.state.round]) this.state.answers[this.state.round] = {};
-      this.state.answers[this.state.round][this.myId] = words;
-      this.state.done[this.myId] = true;
+      if(!this.state.g.answers[this.state.g.round]) this.state.g.answers[this.state.g.round] = {};
+      this.state.g.answers[this.state.g.round][this.myId] = words;
+      this.state.g.done[this.myId] = true;
       this.broadcastState();
       this.checkAllDone();
     } else {
-      this.sendAction('submit', { id:this.myId, round:this.state.round, words });
+      this.sendAction('submit', { id:this.myId, round:this.state.g.round, words });
     }
     this.local.screen = 'wait';
     this.renderScreen();
@@ -514,7 +551,7 @@ class Game {
     this.local.reveal = 0;
     this.later(()=>{
       this.revealTick = setInterval(()=>{
-        const n = this.groups(this.state.round).length;
+        const n = this.groups(this.state.g.round).length;
         if(this.local.reveal >= n){ clearInterval(this.revealTick); return; }
         this.local.reveal++;
         this.renderScreen();
@@ -657,7 +694,7 @@ class Game {
     });
     const filled = this.local.inputs.filter(x=>norm(x)).length;
     const fc = this.root.querySelector('[data-el="filledCount"]');
-    if(fc) fc.textContent = filled+' / '+this.state.config.words;
+    if(fc) fc.textContent = filled+' / '+this.state.gameConfig.words;
   }
 
   // Debounced checkpoint of in-progress words sent to the host, so a
@@ -671,14 +708,14 @@ class Game {
     this._draftTimer = setTimeout(()=>{
       if(this.local.screen!=='round' || this.local.submitted || !this.state) return;
       const words = this.local.inputs.map(v=>v.trim()).filter(Boolean);
-      this.sendAction('draft', { id:this.myId, round:this.state.round, words });
+      this.sendAction('draft', { id:this.myId, round:this.state.g.round, words });
     }, 600);
   }
 
   get actions(){
     return {
       goHome: ()=>this.goHome(),
-      goCreate: ()=>{ this.local.screen='create'; this.renderScreen(); },
+      goSetup: ()=>{ this.local.screen='setup'; this.renderScreen(); },
       openHow: ()=>{ this.local.modal='how'; this.renderModals(); },
       closeModal: ()=>{ this.local.modal=null; this.local.showJoinName=false; this.renderModals(); },
       stop: (t,e)=>e.stopPropagation(),
@@ -686,26 +723,45 @@ class Game {
       createGame: ()=>this.createGame(),
       joinGame: ()=>this.joinGame(),
       confirmJoinName: ()=>this.confirmJoinName(),
-      startGame: ()=>this.startGame(),
+      startGame: ()=>{
+        if(this.state.gameId==='unanimo') this.uStartGame();
+        else if(this.state.gameId==='dibujalo') this.dStartGame();
+        else if(this.state.gameId==='tuttifrutti') this.tfStartGame();
+      },
       copyCode: ()=>{ try{ navigator.clipboard.writeText(this.state.code); }catch(e){} this.toast('Código copiado', MINT); },
-      decPlayers: ()=>{ this.cfgDraft.players = clamp(this.cfgDraft.players-1,2,12); this.renderScreen(); },
-      incPlayers: ()=>{ this.cfgDraft.players = clamp(this.cfgDraft.players+1,2,12); this.renderScreen(); },
-      decWords: ()=>{ this.cfgDraft.words = clamp(this.cfgDraft.words-1,3,8); this.renderScreen(); },
-      incWords: ()=>{ this.cfgDraft.words = clamp(this.cfgDraft.words+1,3,8); this.renderScreen(); },
-      setRounds: (t)=>{ this.cfgDraft.rounds = Number(t.dataset.val); this.renderScreen(); },
-      setTime: (t)=>{ this.cfgDraft.time = Number(t.dataset.val); this.renderScreen(); },
+      // --- portal: host picking / configuring a game from the lobby ---
+      pickGame: (t)=>{ this.local.hostFlow = t.dataset.game; this.renderScreen(); },
+      backToPicker: ()=>{ this.local.hostFlow = null; this.renderScreen(); },
+      backToPortal: ()=>this.backToPortal(),
+      confirmUnanimoConfig: ()=>this.confirmUnanimoConfig(),
+      confirmDibujaloConfig: ()=>this.confirmDibujaloConfig(),
+      confirmTfConfig: ()=>this.confirmTfConfig(),
+      decWords: ()=>{ this.uDraft.words = clamp(this.uDraft.words-1,3,8); this.renderScreen(); },
+      incWords: ()=>{ this.uDraft.words = clamp(this.uDraft.words+1,3,8); this.renderScreen(); },
+      setRounds: (t)=>{ this.uDraft.rounds = Number(t.dataset.val); this.renderScreen(); },
+      setTime: (t)=>{ this.uDraft.time = Number(t.dataset.val); this.renderScreen(); },
       submitNow: ()=>this.submit(false),
-      revealAll: ()=>{ clearInterval(this.revealTick); this.local.reveal = this.groups(this.state.round).length; this.renderScreen(); },
+      revealAll: ()=>{ clearInterval(this.revealTick); this.local.reveal = this.groups(this.state.g.round).length; this.renderScreen(); },
       goScore: ()=>{ this.local.screen='score'; this.local.selPid=this.myId; this.renderScreen(); },
       goRanking: ()=>{ this.local.screen='ranking'; this.local.rankPhase=0; this.renderScreen(); this.later(()=>{ this.local.rankPhase=1; this.renderScreen(); },900); },
       selectPlayer: (t)=>{ this.local.selPid = t.dataset.pid; this.renderScreen(); },
-      nextRound: ()=>this.hostNext(),
-      playAgain: ()=>this.hostPlayAgain(),
+      nextRound: ()=>{
+        if(this.state.gameId==='unanimo') this.uNext();
+        else if(this.state.gameId==='dibujalo') this.dNext();
+        else if(this.state.gameId==='tuttifrutti') this.tfNext();
+      },
+      playAgain: ()=>{
+        if(this.state.gameId==='unanimo') this.uPlayAgain();
+        else if(this.state.gameId==='dibujalo') this.dPlayAgain();
+        else if(this.state.gameId==='tuttifrutti') this.tfPlayAgain();
+      },
       avatarPrev: (t)=>{ const k=t.dataset.trait, n=Number(t.dataset.count); this.local.avatar[k] = ((this.local.avatar[k]||0)-1+n)%n; this.refreshAvatarUI(); },
       avatarNext: (t)=>{ const k=t.dataset.trait, n=Number(t.dataset.count); this.local.avatar[k] = ((this.local.avatar[k]||0)+1)%n; this.refreshAvatarUI(); },
       toggleSound: ()=>this.toggleSound(),
       toggleChat: ()=>this.toggleChat(),
       sendChat: ()=>this.sendChat(),
+      ...(this.dibujaloActions ? this.dibujaloActions() : {}),
+      ...(this.tfActions ? this.tfActions() : {}),
     };
   }
 
@@ -715,7 +771,7 @@ class Game {
     const sc = this.local.screen;
     let html = '';
     if(sc==='home') html = this.viewHome();
-    else if(sc==='create') html = this.viewCreate();
+    else if(sc==='setup') html = this.viewSetup();
     else if(sc==='lobby') html = this.viewLobby();
     else if(sc==='round') html = this.viewRound();
     else if(sc==='wait') html = this.viewWait();
@@ -731,7 +787,7 @@ class Game {
 
     if(sc==='round'){
       this.later(()=>{ const el=this.root.querySelector('[data-role="word-input"][data-index="0"]'); if(el) el.focus({preventScroll:true}); }, 50);
-      const left = this.state ? Math.max(0, Math.round((this.state.roundEndAt - Date.now())/1000)) : 0;
+      const left = this.state ? Math.max(0, Math.round((this.state.g.roundEndAt - Date.now())/1000)) : 0;
       this.patchTimer(left);
     }
   }
@@ -748,10 +804,10 @@ class Game {
     if(this.local.modal === 'how'){
       m += `<div class="modal-overlay" data-action="closeModal">
         <div class="modal" data-action="stop">
-          <div class="heading" style="font-size:32px">Cómo jugar</div>
-          ${this.howStep(1,YEL,'Todos reciben la misma palabra','Por ejemplo: PLAYA.')}
-          ${this.howStep(2,VIOLET,'Escribí lo que van a poner los demás','No gana lo más original: gana pensar igual que el resto.')}
-          ${this.howStep(3,CORAL,'Sumá por cada coincidencia','Si vos y 3 jugadores más pusieron MAR, sumás +3.')}
+          <div class="heading" style="font-size:32px">Cómo funciona</div>
+          ${this.howStep(1,YEL,'Creá una sala','Elegís tu nombre y armás tu personaje. Se genera un código de 5 letras.')}
+          ${this.howStep(2,VIOLET,'Invitá a tus amigos','Les pasás el código para que se unan desde su celular.')}
+          ${this.howStep(3,CORAL,'Elijan a qué jugar','Unánimo, Dibujalo, Tutti Frutti... el anfitrión elige, todos juegan.')}
           <button class="btn-primary" data-action="closeModal">¡ENTENDIDO!</button>
         </div>
       </div>`;
@@ -833,10 +889,10 @@ class Game {
           <div style="display:flex;gap:clamp(4px,1.2vw,8px)">
             ${['U','N','A','N','I','M','O'].map((ch,i)=>`<div style="animation:drop .6s cubic-bezier(.3,1.5,.5,1) ${(i*0.06).toFixed(2)}s both"><div style="width:clamp(42px,11.5vw,72px);height:clamp(52px,14vw,86px);border-radius:14px;background:${[CORAL,VIOLET,YEL,VIOLET,MINT,BLUE,PINK][i]};border:2.5px solid ${INK};box-shadow:0 5px 0 ${INK};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:clamp(28px,8vw,52px);transform:rotate(${[-6,4,-3,5,-4,3,-5][i]}deg)">${ch}</div></div>`).join('')}
           </div>
-          <div class="heading" style="font-size:clamp(22px,6vw,28px);animation:rise .5s .5s both">Pensá como los demás.</div>
+          <div class="heading" style="font-size:clamp(22px,6vw,28px);animation:rise .5s .5s both">Party games para jugar con amigos.</div>
         </div>
         <div style="width:100%;display:flex;flex-direction:column;gap:14px;animation:rise .5s .65s both">
-          <button class="btn-primary" data-action="goCreate">JUGAR</button>
+          <button class="btn-primary" data-action="goSetup">CREAR SALA</button>
           <div style="display:flex;flex-direction:column;gap:8px;padding:14px;border-radius:20px;background:#fff;border:2px solid var(--line)">
             <div style="font-size:14px;font-weight:700;color:var(--muted);padding-left:4px">¿Te pasaron un código?</div>
             <div style="display:flex;gap:10px">
@@ -853,27 +909,129 @@ class Game {
     </div>`;
   }
 
-  viewCreate(){
-    const cfg = this.cfgDraft;
-    const roundOpts = [1,2,3,4,5].map(n=>`<button data-action="setRounds" data-val="${n}" style="height:48px;border-radius:14px;border:2px solid ${INK};background:${cfg.rounds===n?INK:'#fff'};color:${cfg.rounds===n?'var(--cream)':INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:20px">${n}</button>`).join('');
-    const timeOpts = [30,45,60,90].map(n=>`<button data-action="setTime" data-val="${n}" style="height:48px;border-radius:14px;border:2px solid ${INK};background:${cfg.time===n?INK:'#fff'};color:${cfg.time===n?'var(--cream)':INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:18px">${n}s</button>`).join('');
-    const estimate = '≈ '+Math.max(1,Math.round(cfg.rounds*(cfg.time+35)/60))+' min de juego';
+  viewSetup(){
     return `<div class="screen screen-narrow">
-      <div class="top-bar"><button class="icon-btn" data-action="goHome" aria-label="Volver">${this.iconBack()}</button><div class="heading" style="font-size:28px">Crear partida</div></div>
+      <div class="top-bar"><button class="icon-btn" data-action="goHome" aria-label="Volver">${this.iconBack()}</button><div class="heading" style="font-size:28px">Armá tu sala</div></div>
       <div style="display:flex;flex-direction:column;gap:8px">
         <div style="font-size:14px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)">Tu nombre</div>
         <input data-role="cfg-name" value="${esc(this.local.cfgName)}" placeholder="¿Cómo te llamás?" style="height:60px;border-radius:16px;border:2px solid ${INK};background:#fff;padding:0 18px;font-family:'Figtree',sans-serif;font-weight:700;font-size:20px;color:${INK};outline:none">
       </div>
       <div style="background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:16px 18px">${this.avatarPicker()}</div>
-      <div style="background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:6px 18px;display:flex;flex-direction:column">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 0;border-bottom:2px solid var(--panel-line)">
-          <div style="display:flex;flex-direction:column;gap:2px"><div style="font-weight:800;font-size:17px">Jugadores</div><div style="font-size:14px;color:var(--muted)">Máximo en la sala</div></div>
-          <div style="display:flex;align-items:center;gap:10px">
-            <button data-action="decPlayers" aria-label="Menos" style="width:44px;height:44px;border-radius:14px;border:2px solid ${INK};background:var(--cream);font-size:24px;font-weight:800;color:${INK}">−</button>
-            <div style="width:36px;text-align:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:28px">${cfg.players}</div>
-            <button data-action="incPlayers" aria-label="Más" style="width:44px;height:44px;border-radius:14px;border:2px solid ${INK};background:var(--cream);font-size:24px;font-weight:800;color:${INK}">+</button>
-          </div>
+      <div class="sticky-bottom">
+        <div style="text-align:center;font-size:14px;font-weight:700;color:var(--muted)">Elegís a qué jugar una vez adentro, con todos.</div>
+        <button class="btn-primary" data-action="createGame">CREAR SALA</button>
+      </div>
+    </div>`;
+  }
+
+  // --- lobby: room shell (code + players), always shown; below it either
+  // the portal's game picker, a game's config screen, or (once a game is
+  // chosen) that game's chips + start button — all without leaving 'lobby'.
+  viewLobby(){
+    const s = this.state, pl = this.players();
+    if(this.isHost && this.local.hostFlow){
+      if(this.local.hostFlow==='unanimo') return this.viewUnanimoConfig();
+      if(this.local.hostFlow==='dibujalo') return this.viewDibujaloConfig ? this.viewDibujaloConfig() : this.viewComingSoonConfig('dibujalo');
+      if(this.local.hostFlow==='tuttifrutti') return this.viewTfConfig ? this.viewTfConfig() : this.viewComingSoonConfig('tuttifrutti');
+    }
+    const hostId = s.hostId;
+    const n = Math.max(6, pl.length);
+    const codeChars = s.code.split('').map(c=>`<div style="width:clamp(48px,13vw,64px);height:clamp(58px,15vw,74px);border-radius:14px;background:#fff;border:2.5px solid ${INK};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:clamp(30px,8vw,40px)">${c}</div>`).join('');
+    const slots = Array.from({length:n},(_,i)=>{
+      const p = pl[i];
+      if(!p) return `<div style="display:flex;align-items:center;gap:12px;padding:12px;border-radius:20px;border:2px dashed var(--dashed);animation:breathe 2s ease-in-out infinite"><div style="flex:0 0 auto;width:46px;height:46px;border-radius:50%;border:2px dashed var(--dashed)"></div><div style="font-size:15px;font-weight:700;color:var(--muted)">Esperando…</div></div>`;
+      const tag = p.id===this.myId ? (p.id===hostId?'Vos · Anfitrión':'Vos') : (p.id===hostId?'Anfitrión':'Listo para jugar');
+      return `<div style="display:flex;align-items:center;gap:12px;padding:12px;border-radius:20px;background:#fff;border:2px solid ${INK};box-shadow:0 3px 0 ${INK};animation:pop .45s cubic-bezier(.3,1.5,.5,1) both">
+        <div style="width:46px;height:46px;flex:0 0 auto">${avatarSVG(p.avatar,46)}</div>
+        <div style="min-width:0;display:flex;flex-direction:column;gap:1px"><div style="font-weight:800;font-size:17px;overflow:hidden;text-overflow:ellipsis">${esc(p.name)}</div><div style="font-size:13px;font-weight:600;color:var(--muted)">${tag}</div></div>
+      </div>`;
+    }).join('');
+
+    let lowerSection;
+    if(!s.gameId){
+      lowerSection = this.isHost ? this.viewGamePicker() : `
+        <div style="display:flex;flex-direction:column;align-items:center;gap:10px;text-align:center;padding:24px 0">
+          <div style="font-size:34px">🎮</div>
+          <div class="heading" style="font-size:20px">${esc(this.playerById(hostId)?.name||'El anfitrión')} está eligiendo el juego…</div>
+          <div style="font-size:14px;font-weight:600;color:var(--muted)">Ya te avisamos apenas arranque.</div>
+        </div>`;
+    } else {
+      const meta = gameMeta(s.gameId);
+      const chips = this.gameConfigChips(s.gameId, s.gameConfig);
+      const minOk = pl.length >= (meta?.min||2);
+      const canStart = this.isHost && minOk;
+      const bottom = this.isHost
+        ? (canStart ? `<button class="btn-primary" data-action="startGame">COMENZAR ${esc(meta.name.toUpperCase())}</button>`
+          : `<div style="text-align:center;font-size:14px;font-weight:700;color:var(--muted)">Se necesitan al menos ${meta.min} jugadores</div><button class="btn-primary" disabled>COMENZAR ${esc(meta.name.toUpperCase())}</button>`)
+        : `<div style="height:62px;border-radius:18px;border:2px solid ${INK};background:#fff;display:flex;align-items:center;justify-content:center;gap:10px;font-weight:800;font-size:17px">${esc(this.playerById(hostId)?.name||'El anfitrión')} va a comenzar<span style="display:flex;gap:3px"><span style="animation:blink 1.2s infinite">•</span><span style="animation:blink 1.2s .2s infinite">•</span><span style="animation:blink 1.2s .4s infinite">•</span></span></div>`;
+      lowerSection = `
+        <div style="display:flex;align-items:center;gap:10px;padding:14px 16px;border-radius:20px;background:#fff;border:2px solid ${INK}">
+          <div style="width:40px;height:40px;border-radius:12px;background:${meta.colors[0]};border:2px solid ${INK};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:16px">${meta.letters[0]}</div>
+          <div style="flex:1;min-width:0"><div class="heading" style="font-size:19px">${esc(meta.name)}</div><div style="font-size:13px;font-weight:600;color:var(--muted)">${esc(meta.tagline)}</div></div>
+          ${this.isHost?`<button data-action="pickGame" data-game="${s.gameId}" aria-label="Cambiar configuración" style="flex:0 0 auto;height:38px;padding:0 14px;border-radius:12px;border:2px solid ${INK};background:var(--cream);font-weight:800;font-size:13px">Editar</button>`:''}
         </div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px">${chips}</div>
+        <div class="sticky-bottom">${bottom}</div>`;
+    }
+
+    return `<div class="screen">
+      <div class="top-bar"><button class="icon-btn" data-action="askLeave" aria-label="Volver">${this.iconBack()}</button><div class="heading" style="font-size:28px">Lobby</div></div>
+      <div style="background:${YEL};border:2.5px solid ${INK};border-radius:28px;box-shadow:0 6px 0 ${INK};padding:22px 20px;display:flex;flex-direction:column;align-items:center;gap:16px">
+        <div style="font-size:13px;font-weight:800;letter-spacing:.14em;text-transform:uppercase">Código de la partida</div>
+        <div style="display:flex;gap:8px">${codeChars}</div>
+        <button data-action="copyCode" style="height:48px;padding:0 20px;border-radius:14px;border:2px solid ${INK};background:${INK};color:var(--cream);display:flex;align-items:center;gap:10px;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:16px;letter-spacing:.05em">${this.iconCopy()}COPIAR CÓDIGO</button>
+      </div>
+      <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px">
+        <div class="heading" style="font-size:22px">Jugadores</div>
+        <div class="heading" style="font-size:22px">${pl.length}</div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px">${slots}</div>
+      <div style="display:flex;flex-direction:column;gap:14px">${lowerSection}</div>
+    </div>`;
+  }
+
+  gameConfigChips(gameId, cfg){
+    if(!cfg) return '';
+    let items = [];
+    if(gameId==='unanimo') items = [cfg.rounds+(cfg.rounds===1?' ronda':' rondas'), cfg.words+' palabras', cfg.time+' s por ronda'];
+    else if(gameId==='dibujalo') items = [cfg.rounds+(cfg.rounds===1?' ronda':' rondas'), cfg.chooseTime+'s para elegir', cfg.drawTime+'s para dibujar'];
+    else if(gameId==='tuttifrutti') items = [cfg.rounds+(cfg.rounds===1?' ronda':' rondas'), cfg.categories.length+' categorías', cfg.time+'s por ronda'];
+    return items.map(t=>`<div style="padding:8px 14px;border-radius:999px;background:#fff;border:2px solid var(--line);font-size:14px;font-weight:700">${esc(t)}</div>`).join('');
+  }
+
+  viewGamePicker(){
+    const cards = GAMES.map(g=>`
+      <button data-action="pickGame" data-game="${g.id}" style="display:flex;align-items:center;gap:14px;width:100%;padding:14px 16px;border-radius:22px;background:#fff;border:2.5px solid ${INK};box-shadow:0 4px 0 ${INK};text-align:left;transition:transform .08s,box-shadow .08s" style-active="transform:translateY(3px);box-shadow:0 1px 0 ${INK}">
+        <div style="display:flex;gap:4px;flex:0 0 auto">
+          <div style="width:40px;height:48px;border-radius:12px;background:${g.colors[0]};border:2px solid ${INK};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:22px;transform:rotate(-4deg)">${g.letters[0]}</div>
+          <div style="width:40px;height:48px;border-radius:12px;background:${g.colors[1]};border:2px solid ${INK};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:22px;transform:rotate(4deg)">${g.letters[1]}</div>
+        </div>
+        <div style="flex:1;min-width:0"><div class="heading" style="font-size:20px">${esc(g.name)}</div><div style="font-size:13px;font-weight:600;color:var(--muted)">${esc(g.tagline)}</div></div>
+        <div style="flex:0 0 auto;font-size:22px">▶</div>
+      </button>`).join('');
+    return `<div style="display:flex;flex-direction:column;gap:10px">
+      <div style="font-size:13px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);padding:0 4px">¿A qué jugamos?</div>
+      ${cards}
+    </div>`;
+  }
+  viewComingSoonConfig(gameId){
+    const meta = gameMeta(gameId);
+    return `<div class="screen screen-narrow">
+      <div class="top-bar"><button class="icon-btn" data-action="backToPicker" aria-label="Volver">${this.iconBack()}</button><div class="heading" style="font-size:28px">${esc(meta.name)}</div></div>
+      <div style="display:flex;flex-direction:column;align-items:center;gap:10px;text-align:center;padding:40px 0">
+        <div style="font-size:40px">🚧</div>
+        <div class="heading" style="font-size:20px">Muy pronto</div>
+      </div>
+    </div>`;
+  }
+  viewUnanimoConfig(){
+    const cfg = this.uDraft;
+    const roundOpts = [1,2,3,4,5].map(n=>`<button data-action="setRounds" data-val="${n}" style="height:48px;border-radius:14px;border:2px solid ${INK};background:${cfg.rounds===n?INK:'#fff'};color:${cfg.rounds===n?'var(--cream)':INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:20px">${n}</button>`).join('');
+    const timeOpts = [30,45,60,90].map(n=>`<button data-action="setTime" data-val="${n}" style="height:48px;border-radius:14px;border:2px solid ${INK};background:${cfg.time===n?INK:'#fff'};color:${cfg.time===n?'var(--cream)':INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:18px">${n}s</button>`).join('');
+    const estimate = '≈ '+Math.max(1,Math.round(cfg.rounds*(cfg.time+35)/60))+' min de juego';
+    return `<div class="screen screen-narrow">
+      <div class="top-bar"><button class="icon-btn" data-action="backToPicker" aria-label="Volver">${this.iconBack()}</button><div class="heading" style="font-size:28px">Unánimo</div></div>
+      <div style="background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:6px 18px;display:flex;flex-direction:column">
         <div style="display:flex;flex-direction:column;gap:10px;padding:14px 0;border-bottom:2px solid var(--panel-line)">
           <div style="font-weight:800;font-size:17px">Rondas</div>
           <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px">${roundOpts}</div>
@@ -893,57 +1051,18 @@ class Game {
       </div>
       <div class="sticky-bottom">
         <div style="text-align:center;font-size:14px;font-weight:700;color:var(--muted)">${estimate}</div>
-        <button class="btn-primary" data-action="createGame">CREAR PARTIDA</button>
+        <button class="btn-primary" data-action="confirmUnanimoConfig">LISTO, VOLVER AL LOBBY</button>
       </div>
-    </div>`;
-  }
-
-  viewLobby(){
-    const s = this.state, cfg = s.config, pl = this.players();
-    const hostId = s.hostId;
-    const n = Math.max(cfg.players, pl.length);
-    const codeChars = s.code.split('').map(c=>`<div style="width:clamp(48px,13vw,64px);height:clamp(58px,15vw,74px);border-radius:14px;background:#fff;border:2.5px solid ${INK};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:clamp(30px,8vw,40px)">${c}</div>`).join('');
-    const slots = Array.from({length:n},(_,i)=>{
-      const p = pl[i];
-      if(!p) return `<div style="display:flex;align-items:center;gap:12px;padding:12px;border-radius:20px;border:2px dashed var(--dashed);animation:breathe 2s ease-in-out infinite"><div style="flex:0 0 auto;width:46px;height:46px;border-radius:50%;border:2px dashed var(--dashed)"></div><div style="font-size:15px;font-weight:700;color:var(--muted)">Esperando…</div></div>`;
-      const tag = p.id===this.myId ? (p.id===hostId?'Vos · Anfitrión':'Vos') : (p.id===hostId?'Anfitrión':'Listo para jugar');
-      return `<div style="display:flex;align-items:center;gap:12px;padding:12px;border-radius:20px;background:#fff;border:2px solid ${INK};box-shadow:0 3px 0 ${INK};animation:pop .45s cubic-bezier(.3,1.5,.5,1) both">
-        <div style="width:46px;height:46px;flex:0 0 auto">${avatarSVG(p.avatar,46)}</div>
-        <div style="min-width:0;display:flex;flex-direction:column;gap:1px"><div style="font-weight:800;font-size:17px;overflow:hidden;text-overflow:ellipsis">${esc(p.name)}</div><div style="font-size:13px;font-weight:600;color:var(--muted)">${tag}</div></div>
-      </div>`;
-    }).join('');
-    const chips = [cfg.rounds+(cfg.rounds===1?' ronda':' rondas'), cfg.words+' palabras', cfg.time+' s por ronda'].map(t=>`<div style="padding:8px 14px;border-radius:999px;background:#fff;border:2px solid var(--line);font-size:14px;font-weight:700">${t}</div>`).join('');
-    const isHost = this.isHost;
-    const canStart = isHost && pl.length>=2;
-    const cantStart = isHost && pl.length<2;
-    const bottom = isHost
-      ? (canStart ? `<button class="btn-primary" data-action="startGame">COMENZAR PARTIDA</button>`
-        : `<div style="text-align:center;font-size:14px;font-weight:700;color:var(--muted)">Se necesitan al menos 2 jugadores</div><button class="btn-primary" disabled>COMENZAR PARTIDA</button>`)
-      : `<div style="height:62px;border-radius:18px;border:2px solid ${INK};background:#fff;display:flex;align-items:center;justify-content:center;gap:10px;font-weight:800;font-size:17px">${esc(this.playerById(hostId)?.name||'El anfitrión')} va a comenzar la partida<span style="display:flex;gap:3px"><span style="animation:blink 1.2s infinite">•</span><span style="animation:blink 1.2s .2s infinite">•</span><span style="animation:blink 1.2s .4s infinite">•</span></span></div>`;
-    return `<div class="screen">
-      <div class="top-bar"><button class="icon-btn" data-action="askLeave" aria-label="Volver">${this.iconBack()}</button><div class="heading" style="font-size:28px">Lobby</div></div>
-      <div style="background:${YEL};border:2.5px solid ${INK};border-radius:28px;box-shadow:0 6px 0 ${INK};padding:22px 20px;display:flex;flex-direction:column;align-items:center;gap:16px">
-        <div style="font-size:13px;font-weight:800;letter-spacing:.14em;text-transform:uppercase">Código de la partida</div>
-        <div style="display:flex;gap:8px">${codeChars}</div>
-        <button data-action="copyCode" style="height:48px;padding:0 20px;border-radius:14px;border:2px solid ${INK};background:${INK};color:var(--cream);display:flex;align-items:center;gap:10px;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:16px;letter-spacing:.05em">${this.iconCopy()}COPIAR CÓDIGO</button>
-      </div>
-      <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px">
-        <div class="heading" style="font-size:22px">Jugadores</div>
-        <div class="heading" style="font-size:22px">${pl.length}</div>
-      </div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px">${slots}</div>
-      <div style="display:flex;flex-wrap:wrap;gap:8px">${chips}</div>
-      <div class="sticky-bottom">${bottom}</div>
     </div>`;
   }
 
   renderStatusWidget(){
     const s = this.state, pl = this.players();
     const dots = pl.map(p=>{
-      const done = !!s.done[p.id];
+      const done = !!s.g.done[p.id];
       return `<div style="position:relative;width:38px;height:38px;opacity:${done?1:0.45};transition:opacity .3s">${avatarSVG(p.avatar,38)}${done?`<div style="position:absolute;right:-5px;bottom:-5px;width:20px;height:20px;border-radius:50%;background:${MINT};border:2px solid ${INK};display:flex;align-items:center;justify-content:center;animation:pop .4s both">${this.iconCheckSmall()}</div>`:''}</div>`;
     }).join('');
-    const doneNames = pl.filter(p=>p.id!==this.myId && s.done[p.id]).map(p=>p.name);
+    const doneNames = pl.filter(p=>p.id!==this.myId && s.g.done[p.id]).map(p=>p.name);
     const statusText = doneNames.length ? listJoin(doneNames)+(doneNames.length>1?' ya terminaron':' ya terminó') : 'Todos están escribiendo…';
     return `<div data-el="statusWidget" style="display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:18px;background:#fff;border:2px solid var(--line)">
       <div style="display:flex;gap:6px">${dots}</div>
@@ -952,8 +1071,8 @@ class Game {
   }
 
   viewRound(){
-    const s = this.state, cfg = s.config;
-    const promptSize = s.roundWord.length>7 ? 'clamp(36px, 10vw, 72px)' : 'clamp(56px, 16vw, 108px)';
+    const s = this.state, cfg = s.gameConfig;
+    const promptSize = s.g.roundWord.length>7 ? 'clamp(36px, 10vw, 72px)' : 'clamp(56px, 16vw, 108px)';
     const fields = this.local.inputs.map((v,i)=>{
       const k = norm(v);
       return `<div data-field="${i}" style="position:relative;display:flex;align-items:center">
@@ -966,7 +1085,7 @@ class Game {
       <div style="position:sticky;top:0;z-index:10;background:var(--cream)">
         <div style="max-width:1080px;margin:0 auto;padding:12px 20px;display:flex;align-items:center;gap:12px">
           <button class="icon-btn" data-action="askLeave" aria-label="Salir">${this.iconClose()}</button>
-          <div style="flex:1;min-width:0;display:flex;align-items:baseline;gap:6px;font-family:'Bricolage Grotesque',sans-serif;font-weight:800"><span style="font-size:22px">RONDA ${s.round+1}</span><span style="font-size:16px;color:var(--muted)">de ${cfg.rounds}</span></div>
+          <div style="flex:1;min-width:0;display:flex;align-items:baseline;gap:6px;font-family:'Bricolage Grotesque',sans-serif;font-weight:800"><span style="font-size:22px">RONDA ${s.g.round+1}</span><span style="font-size:16px;color:var(--muted)">de ${cfg.rounds}</span></div>
           <div data-el="timerBox" style="display:flex;align-items:center;gap:8px;height:50px;padding:0 16px;border-radius:999px;border:2px solid ${INK};background:#fff;box-shadow:0 3px 0 ${INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:26px;font-variant-numeric:tabular-nums">${this.iconClock()}<span data-el="timerText">${mmss(cfg.time)}</span></div>
         </div>
         <div style="height:6px;background:var(--line)"><div data-el="timerBar" style="height:100%;width:100%;background:${INK};transition:width 1s linear,background .3s"></div></div>
@@ -975,7 +1094,7 @@ class Game {
         <div style="flex:1 1 360px;min-width:0;display:flex;flex-direction:column;gap:14px">
           <div style="background:${YEL};border:2.5px solid ${INK};border-radius:28px;box-shadow:0 6px 0 ${INK};padding:26px 22px 30px;display:flex;flex-direction:column;align-items:center;gap:14px;text-align:center;animation:pop .5s cubic-bezier(.3,1.5,.5,1) both">
             <div style="font-size:13px;font-weight:800;letter-spacing:.14em;text-transform:uppercase">La palabra es</div>
-            <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:${promptSize};line-height:.95;letter-spacing:-.03em;overflow-wrap:anywhere">${esc(s.roundWord)}</div>
+            <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:${promptSize};line-height:.95;letter-spacing:-.03em;overflow-wrap:anywhere">${esc(s.g.roundWord)}</div>
             <div style="font-size:17px;font-weight:600;max-width:320px;text-wrap:pretty">Escribí ${cfg.words} palabras que relaciones con esta palabra.</div>
           </div>
           ${this.renderStatusWidget()}
@@ -996,10 +1115,10 @@ class Game {
 
   viewWait(){
     const s = this.state, pl = this.players();
-    const dc = pl.filter(p=>s.done[p.id]).length;
+    const dc = pl.filter(p=>s.g.done[p.id]).length;
     const allDone = dc===pl.length;
     const waitList = pl.map(p=>{
-      const done = !!s.done[p.id];
+      const done = !!s.g.done[p.id];
       const label = p.id===this.myId ? p.name+' (vos)' : p.name;
       return `<div style="display:flex;align-items:center;gap:12px;padding:10px 0">
         <div style="width:42px;height:42px;flex:0 0 auto">${avatarSVG(p.avatar,42)}</div>
@@ -1008,9 +1127,9 @@ class Game {
                : `<div style="display:flex;align-items:center;gap:6px;padding:6px 12px;border-radius:999px;background:var(--panel-line);font-size:13px;font-weight:800;color:var(--muted)">Escribiendo<span style="display:flex;gap:2px"><span style="animation:blink 1.2s infinite">•</span><span style="animation:blink 1.2s .2s infinite">•</span><span style="animation:blink 1.2s .4s infinite">•</span></span></div>`}
       </div>`;
     }).join('');
-    const myWords = ((s.answers[s.round]||{})[this.myId]||[]).map(w=>`<div style="padding:8px 14px;border-radius:999px;background:#fff;border:2px solid ${INK};font-weight:800;font-size:15px">${esc(disp(w))}</div>`).join('');
+    const myWords = ((s.g.answers[s.g.round]||{})[this.myId]||[]).map(w=>`<div style="padding:8px 14px;border-radius:999px;background:#fff;border:2px solid ${INK};font-weight:800;font-size:15px">${esc(disp(w))}</div>`).join('');
     return `<div class="screen screen-narrow">
-      <div style="display:flex;justify-content:center"><div style="padding:8px 16px;border-radius:999px;background:#fff;border:2px solid var(--line);font-size:14px;font-weight:800;letter-spacing:.06em">RONDA ${s.round+1} · ${esc(s.roundWord)}</div></div>
+      <div style="display:flex;justify-content:center"><div style="padding:8px 16px;border-radius:999px;background:#fff;border:2px solid var(--line);font-size:14px;font-weight:800;letter-spacing:.06em">RONDA ${s.g.round+1} · ${esc(s.g.roundWord)}</div></div>
       <div style="display:flex;flex-direction:column;align-items:center;gap:12px;text-align:center;padding-top:12px">
         <div style="width:96px;height:96px;border-radius:50%;background:${MINT};border:2.5px solid ${INK};box-shadow:0 5px 0 ${INK};display:flex;align-items:center;justify-content:center;animation:pop .5s cubic-bezier(.3,1.6,.5,1) both">${this.iconCheckBig()}</div>
         <div class="heading" style="font-size:56px;line-height:1;letter-spacing:-.02em">¡Listo!</div>
@@ -1030,7 +1149,7 @@ class Game {
 
   viewReveal(){
     const s = this.state;
-    const gs = this.groups(s.round);
+    const gs = this.groups(s.g.round);
     const byId = {}; this.players().forEach(p=>byId[p.id]=p);
     const cards = gs.slice(0, this.local.reveal).map(g=>{
       const mine = g.pids.includes(this.myId), n = g.pids.length;
@@ -1055,13 +1174,13 @@ class Game {
       </div>`;
     }).join('');
     const revealDone = this.local.reveal >= gs.length;
-    const mp = this.points(s.round)[this.myId];
+    const mp = this.points(s.g.round)[this.myId];
     const m = mp ? mp.items.filter(x=>x.pts>0).length : 0;
     const summary = 'Coincidiste en '+m+' de '+(mp?mp.items.length:0)+' palabras';
     return `<div class="screen screen-wide">
       <div style="display:flex;flex-direction:column;align-items:center;gap:12px;text-align:center">
         <div style="font-size:14px;font-weight:800;letter-spacing:.14em">¿QUÉ RESPONDIERON?</div>
-        <div style="padding:10px 26px;border-radius:20px;background:${YEL};border:2.5px solid ${INK};box-shadow:0 5px 0 ${INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:clamp(40px,11vw,64px);line-height:1;letter-spacing:-.02em;transform:rotate(-2deg)">${esc(s.roundWord)}</div>
+        <div style="padding:10px 26px;border-radius:20px;background:${YEL};border:2.5px solid ${INK};box-shadow:0 5px 0 ${INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:clamp(40px,11vw,64px);line-height:1;letter-spacing:-.02em;transform:rotate(-2deg)">${esc(s.g.roundWord)}</div>
         <div style="display:flex;flex-wrap:wrap;justify-content:center;gap:14px;font-size:13px;font-weight:700;color:var(--muted);padding-top:6px">
           <div style="display:flex;align-items:center;gap:6px"><span style="width:14px;height:14px;border-radius:5px;background:${CORAL};border:2px solid ${INK}"></span>Vos también</div>
           <div style="display:flex;align-items:center;gap:6px"><span style="width:14px;height:14px;border-radius:5px;background:#fff;border:2px solid ${INK}"></span>Coincidieron otros</div>
@@ -1084,7 +1203,7 @@ class Game {
 
   viewScore(){
     const s = this.state, pl = this.players();
-    const pts = this.points(s.round);
+    const pts = this.points(s.g.round);
     const order = pl.slice().sort((a,b)=>pts[b.id].total-pts[a.id].total||a.name.localeCompare(b.name));
     const rows = order.map((p,i)=>{
       const sel = this.local.selPid===p.id;
@@ -1106,9 +1225,9 @@ class Game {
     </div>`).join('');
     return `<div class="screen screen-wide">
       <div style="display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center">
-        <div style="font-size:14px;font-weight:800;letter-spacing:.14em">RESULTADOS · RONDA ${s.round+1}</div>
+        <div style="font-size:14px;font-weight:800;letter-spacing:.14em">RESULTADOS · RONDA ${s.g.round+1}</div>
         <div class="heading" style="font-size:clamp(64px,18vw,96px);line-height:1;letter-spacing:-.03em;animation:pop .6s cubic-bezier(.3,1.6,.5,1) both">+${pts[this.myId].total}</div>
-        <div style="font-size:17px;font-weight:700;color:var(--muted)">puntos para vos en ${esc(s.roundWord)}</div>
+        <div style="font-size:17px;font-weight:700;color:var(--muted)">puntos para vos en ${esc(s.g.roundWord)}</div>
       </div>
       <div style="display:flex;flex-wrap:wrap;gap:20px;align-items:flex-start">
         <div style="flex:1 1 340px;min-width:0;display:flex;flex-direction:column;gap:10px">
@@ -1127,8 +1246,8 @@ class Game {
   }
 
   viewRanking(){
-    const s = this.state, cfg = s.config, pl = this.players();
-    const cur = this.totals(s.round), prevT = s.round>0 ? this.totals(s.round-1) : null;
+    const s = this.state, cfg = s.gameConfig, pl = this.players();
+    const cur = this.totals(s.g.round), prevT = s.g.round>0 ? this.totals(s.g.round-1) : null;
     const nr = this.rankOf(cur), orr = prevT ? this.rankOf(prevT) : nr;
     const ph = this.local.rankPhase===1;
     const rows = pl.map(p=>{
@@ -1149,8 +1268,8 @@ class Game {
         <div style="flex:0 0 auto;min-width:72px;text-align:right;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:24px">${total} pts</div>
       </div>`;
     }).join('');
-    const dots = Array.from({length:cfg.rounds},(_,i)=>`<div style="width:${i===s.round?'36px':'14px'};height:10px;border-radius:999px;background:${i<=s.round?INK:'#fff'};border:2px solid ${INK};transition:width .3s"></div>`).join('');
-    const isLast = s.round+1 >= cfg.rounds;
+    const dots = Array.from({length:cfg.rounds},(_,i)=>`<div style="width:${i===s.g.round?'36px':'14px'};height:10px;border-radius:999px;background:${i<=s.g.round?INK:'#fff'};border:2px solid ${INK};transition:width .3s"></div>`).join('');
+    const isLast = s.g.round+1 >= cfg.rounds;
     const nextLabel = isLast ? 'VER RESULTADO FINAL' : 'SIGUIENTE RONDA';
     const bottom = this.isHost
       ? `<button class="btn-primary" data-action="nextRound">${nextLabel}</button>`
@@ -1158,7 +1277,7 @@ class Game {
     return `<div class="screen">
       <div style="display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center">
         <div class="heading" style="font-size:clamp(36px,10vw,52px);letter-spacing:-.02em;line-height:1">CLASIFICACIÓN</div>
-        <div style="font-size:16px;font-weight:700;color:var(--muted)">Después de la ronda ${s.round+1} de ${cfg.rounds}</div>
+        <div style="font-size:16px;font-weight:700;color:var(--muted)">Después de la ronda ${s.g.round+1} de ${cfg.rounds}</div>
       </div>
       <div style="display:flex;gap:6px;justify-content:center">${dots}</div>
       <div style="position:relative;height:${pl.length*86}px">${rows}</div>
@@ -1167,7 +1286,7 @@ class Game {
   }
 
   viewFinal(){
-    const s = this.state, cfg = s.config, pl = this.players();
+    const s = this.state, cfg = s.gameConfig, pl = this.players();
     const byId = {}; pl.forEach(p=>byId[p.id]=p);
     const tot = this.totals(cfg.rounds-1);
     const nr = this.rankOf(tot);
@@ -1197,7 +1316,7 @@ class Game {
     }).join('');
 
     let best=null, myMatch=0, myWords=0, myBest=null; const solo={}, pair={};
-    s.answers.forEach((_,r)=>this.groups(r).forEach(g=>{
+    s.g.answers.forEach((_,r)=>this.groups(r).forEach(g=>{
       const n=g.pids.length;
       if(!best||n>best.n) best={label:g.label,n,r};
       if(n===1) solo[g.pids[0]]=(solo[g.pids[0]]||0)+1;
@@ -1207,7 +1326,7 @@ class Game {
     const pk = Object.entries(pair).sort((a,b)=>b[1]-a[1])[0];
     const sk = Object.entries(solo).sort((a,b)=>b[1]-a[1])[0];
     const stats = [
-      best && {label:'Palabra más popular', value:best.label.toUpperCase(), sub:best.n+' jugadores · '+s.roundWord, bg:CORAL},
+      best && {label:'Palabra más popular', value:best.label.toUpperCase(), sub:best.n+' jugadores · '+s.g.roundWord, bg:CORAL},
       {label:'Tus coincidencias', value:String(myMatch), sub:'de '+myWords+' palabras', bg:YEL},
       myBest && {label:'Tu mejor respuesta compartida', value:myBest.label.toUpperCase(), sub:'+'+(myBest.n-1)+' puntos', bg:VIOLET},
       pk && {label:'Almas gemelas', value:pk[0].split('|').map(id=>byId[id]?.name||'?').join(' & '), sub:pk[1]+' palabras en común', bg:MINT},
@@ -1220,8 +1339,8 @@ class Game {
     </div>`).join('');
     const confettiHtml = this.confetti.map(c=>`<div style="position:absolute;top:-20px;left:${c.left};width:${c.w};height:${c.h};border-radius:3px;background:${c.color};border:1.5px solid ${INK};animation:fall ${c.dur} linear ${c.delay} infinite"></div>`).join('');
     const bottom = this.isHost
-      ? `<button class="btn-primary" data-action="playAgain">JUGAR DE NUEVO</button><button class="btn-secondary" data-action="goHome">VOLVER AL INICIO</button>`
-      : `<button class="btn-secondary" data-action="goHome">VOLVER AL INICIO</button>`;
+      ? `<button class="btn-primary" data-action="playAgain">JUGAR DE NUEVO</button><button class="btn-secondary" data-action="backToPortal">ELEGIR OTRO JUEGO</button>`
+      : `<div style="height:54px;border-radius:16px;border:2px solid ${INK};background:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;color:var(--muted)">Esperando a ${esc(this.playerById(this.state.hostId)?.name||'el anfitrión')}…</div>`;
     return `<div style="position:relative;min-height:100vh;overflow:hidden">
       <div style="position:fixed;inset:0;pointer-events:none;z-index:1;overflow:hidden">${confettiHtml}</div>
       <div style="position:relative;z-index:2;max-width:1080px;margin:0 auto;padding:28px 20px 0;display:flex;flex-direction:column;gap:28px">
