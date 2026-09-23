@@ -27,6 +27,34 @@ const AVATAR_TRAITS = [
 function randomAvatar(){
   return { skin:Math.floor(Math.random()*FACE_COLORS.length), eyes:Math.floor(Math.random()*EYE_STYLES.length), mouth:Math.floor(Math.random()*MOUTH_STYLES.length), hat:0 };
 }
+
+/* ---------- bots: local "practice mode" players driven entirely by the
+   host's own client, so you can try any game solo while you wait for real
+   friends. Never sent over the network as real participants — just
+   ordinary players with isBot:true whose "actions" the host fakes. ---------- */
+const BOT_NAMES = ['Rodo','Cande','Fede','Lu','Maxi','Vale','Tincho','Meli','Naza','Cata','Bruno','Fran'];
+const BOT_WORD_POOL = ['Casa','Perro','Gato','Sol','Agua','Fiesta','Música','Amor','Playa','Auto','Libro','Comida','Amigo','Cielo','Árbol','Fuego','Luna','Flor','Camino','Viento'];
+const BOT_TF_SUFFIXES = ['ola','ino','ana','eta','oso','ura','ico','ando','elo','ita'];
+function circlePts(cx,cy,r,n){ const pts=[]; for(let i=0;i<=n;i++){ const a=(i/n)*Math.PI*2; pts.push({x:cx+Math.cos(a)*r, y:cy+Math.sin(a)*r}); } return pts; }
+function arcPts(cx,cy,r,a0,a1,n){ const pts=[]; for(let i=0;i<=n;i++){ const a=a0+(a1-a0)*(i/n); pts.push({x:cx+Math.cos(a)*r, y:cy+Math.sin(a)*r}); } return pts; }
+// A few simple recognizable doodles a bot "draws" stroke-by-stroke, purely
+// so a solo test session sees something appear on the canvas.
+const DOODLE_BUILDERS = [
+  ()=>[
+    [{x:.28,y:.72},{x:.28,y:.42},{x:.5,y:.2},{x:.72,y:.42},{x:.72,y:.72},{x:.28,y:.72}],
+    [{x:.42,y:.72},{x:.42,y:.55},{x:.58,y:.55},{x:.58,y:.72}],
+  ],
+  ()=>[
+    circlePts(.5,.45,.2,20),
+    [{x:.41,y:.4},{x:.44,y:.4}],
+    [{x:.56,y:.4},{x:.59,y:.4}],
+    arcPts(.5,.46,.1,Math.PI*0.15,Math.PI*0.85,10),
+  ],
+  ()=>[
+    [{x:.47,y:.76},{x:.47,y:.5},{x:.53,y:.5},{x:.53,y:.76},{x:.47,y:.76}],
+    circlePts(.5,.35,.16,18),
+  ],
+];
 // Pixel-art style: bold rectangular blocks with hard edges instead of
 // smooth curves, matching a chunky 8-bit avatar look. Everything is
 // crisp SVG (no raster images), so it scales cleanly from 20px chat
@@ -245,6 +273,33 @@ class Game {
   players(){ return (this.state && this.state.players) || []; }
   playerById(id){ return this.players().find(p=>p.id===id); }
   accentColor(p){ const av=(p&&p.avatar)||{}; return FACE_COLORS[av.skin||0] || FACE_COLORS[0]; }
+
+  /* ---------- bots (practice mode: play solo, host fakes their moves) ---------- */
+  addBot(){
+    if(!this.isHost || !this.state || this.state.phase!=='lobby') return;
+    if(this.state.players.length >= (this.state.maxPlayers||12)){ this.toast('Sala llena', CORAL); return; }
+    const used = new Set(this.state.players.filter(p=>p.isBot).map(p=>p.name));
+    const free = BOT_NAMES.filter(n=>!used.has(n));
+    const name = (free.length ? free : BOT_NAMES)[Math.floor(Math.random()*(free.length ? free.length : BOT_NAMES.length))];
+    const bot = { id:'bot_'+uid(), name, avatar:randomAvatar(), isBot:true, joinedAt:Date.now() };
+    this.state.players.push(bot);
+    this.broadcastState();
+  }
+  removeBot(botId){
+    if(!this.isHost || !this.state) return;
+    const p = this.playerById(botId);
+    if(!p || !p.isBot) return;
+    this.state.players = this.state.players.filter(pl=>pl.id!==botId);
+    this.broadcastState();
+  }
+  botPickWords(n){
+    const pool = BOT_WORD_POOL.slice();
+    for(let i=pool.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [pool[i],pool[j]]=[pool[j],pool[i]]; }
+    return pool.slice(0, Math.min(n, pool.length));
+  }
+  botTfWord(letter){
+    return letter.toUpperCase() + BOT_TF_SUFFIXES[Math.floor(Math.random()*BOT_TF_SUFFIXES.length)];
+  }
   groups(r){
     const a = this.state?.g?.answers?.[r]; if(!a) return [];
     const m = {};
@@ -526,7 +581,7 @@ class Game {
         this.local.tfSubmittedRound = -1;
         this.local.tfIntro = true;
         this.tfStartLocalTimer();
-        this.later(()=>{ this.local.tfIntro=false; this.renderScreen(); }, 1500);
+        this.later(()=>this.runTfLetterSlot(s.g.letter), 30);
       }
       if(s.phase === 'tfReview'){
         this.tfSubmitMyAnswers();
@@ -542,6 +597,10 @@ class Game {
       if(s.phase === 'dReveal'){
         this.dCaptureFinalImage(); // canvas element from 'dDraw' is still mounted right up until renderScreen() below
       }
+      if(s.phase === 'ranking' || s.phase === 'dRanking' || s.phase === 'tfRanking'){
+        this.local.rankPhase = 0;
+        this.later(()=>{ this.local.rankPhase = 1; this.renderScreen(); }, 900);
+      }
       this.renderScreen();
       return;
     }
@@ -555,6 +614,10 @@ class Game {
     else if(this.local.screen === 'reveal') this.renderScreen();
     else if(this.local.screen === 'dDraw') this.dPatchGuesses();
     else if(this.local.screen === 'dChoose') this.renderScreen();
+    // Without this, a 🚩 toggle only ever shows up for whoever clicked it —
+    // everyone else's flags/points never refresh on screen until some other
+    // action happens to force a re-render.
+    else if(this.local.screen === 'tfReview') this.renderScreen();
   }
 
   /* ---------- round flow (host drives global stage) ---------- */
@@ -575,6 +638,19 @@ class Game {
     this.state.stage = (this.state.stage||0) + 1;
     this.hostDrafts = {};
     this.broadcastState();
+    this.players().forEach(p=>{
+      if(!p.isBot) return;
+      const total = this.state.gameConfig.time*1000;
+      const delay = total*0.3 + Math.random()*total*0.5;
+      this.later(()=>{
+        if(!this.isHost || this.state.phase!=='round' || this.state.g.round!==r || this.state.g.done[p.id]) return;
+        if(!this.state.g.answers[r]) this.state.g.answers[r] = {};
+        this.state.g.answers[r][p.id] = this.botPickWords(this.state.gameConfig.words);
+        this.state.g.done[p.id] = true;
+        this.broadcastState();
+        this.checkAllDone();
+      }, delay);
+    });
     clearInterval(this.hostWatch);
     this.hostWatch = setInterval(()=>{
       if(!this.isHost || this.state.phase!=='round' || this.state.g.round!==r) { clearInterval(this.hostWatch); return; }
@@ -658,6 +734,18 @@ class Game {
     this.state.stage = (this.state.stage||0) + 1;
     this.tfDrafts = {};
     this.broadcastState();
+    this.players().forEach(p=>{
+      if(!p.isBot) return;
+      const total = this.state.gameConfig.time*1000;
+      const delay = total*0.25 + Math.random()*total*0.55;
+      this.later(()=>{
+        if(!this.isHost || this.state.g.round!==r || this.state.g.locked) return;
+        const answers = {};
+        this.state.gameConfig.categories.forEach(cat=>{ answers[cat] = Math.random()<0.88 ? this.botTfWord(letter) : ''; });
+        this.tfDrafts = this.tfDrafts || {};
+        this.tfDrafts[p.id] = answers;
+      }, delay);
+    });
     clearInterval(this.tfWatch);
     this.tfWatch = setInterval(()=>{
       if(!this.isHost || this.state.phase!=='tfWrite' || this.state.g.round!==r){ clearInterval(this.tfWatch); return; }
@@ -747,6 +835,28 @@ class Game {
       this.sendAction('tfFlag', { round:r, cat, pid, by:this.myId });
     }
     this.renderScreen();
+  }
+  // Slot-machine style reveal: rapidly cycle random letters, easing out to a
+  // stop on the round's real letter, instead of just popping it in flat.
+  runTfLetterSlot(finalLetter){
+    const el = this.root.querySelector('[data-el="tfIntroLetter"]');
+    if(!el){ this.local.tfIntro = false; this.renderScreen(); return; }
+    const ALPHA = 'ABCDEFGHIJKLMNOPQRSTUVWXYZÑ'.split('');
+    const totalTicks = 16;
+    let tick = 0;
+    const step = ()=>{
+      if(!this.local.tfIntro) return; // player navigated away mid-spin
+      tick++;
+      if(tick >= totalTicks){
+        el.textContent = finalLetter;
+        el.style.animation = 'tick .3s cubic-bezier(.3,1.6,.5,1) both';
+        this.later(()=>{ this.local.tfIntro = false; this.renderScreen(); }, 650);
+        return;
+      }
+      el.textContent = ALPHA[Math.floor(Math.random()*ALPHA.length)];
+      this.later(step, 35 + tick*tick*0.7); // eases out: fast spin slowing to a stop
+    };
+    step();
   }
   tfStartLocalTimer(){
     clearInterval(this.tick);
@@ -867,6 +977,13 @@ class Game {
     // never receive their own message, so hand it to themselves directly.
     if(drawerId === this.myId) this.dReceiveWords(wireOptions);
     else this.send('dWords', { to: drawerId, options: wireOptions });
+    if(this.playerById(drawerId)?.isBot){
+      const pick = trio[Math.floor(Math.random()*trio.length)];
+      this.later(()=>{
+        if(!this.isHost || this.state.phase!=='dChoose' || this.state.g.round!==r) return;
+        this.dHostWordChosen(drawerId, pick.word, pick.category, r, false);
+      }, 1200 + Math.random()*1500);
+    }
     clearInterval(this.dWatch);
     this.dWatch = setInterval(()=>{
       if(!this.isHost || this.state.phase!=='dChoose' || this.state.g.round!==r){ clearInterval(this.dWatch); return; }
@@ -906,6 +1023,18 @@ class Game {
     this.state.stage = (this.state.stage||0) + 1;
     this.broadcastState();
     if(auto) this.toast('¡Tiempo! Se eligió por vos', CORAL);
+    if(this.playerById(drawerId)?.isBot) this.dBotDraw(drawerId, r);
+    this.players().forEach(p=>{
+      if(!p.isBot || p.id===drawerId) return;
+      if(Math.random() >= 0.85) return; // bots occasionally never guess it, like a real player
+      const window = this.state.gameConfig.drawTime*1000;
+      const delay = window*0.35 + Math.random()*window*0.5;
+      this.later(()=>{
+        if(!this.isHost || this.state.phase!=='dDraw' || this.state.g.round!==r) return;
+        if((this.state.g.correctOrder[r]||[]).some(e=>e.id===p.id)) return;
+        this.dHostGuess(p.id, this.dSecretWord||'', delay, r);
+      }, delay);
+    });
     clearInterval(this.dWatch);
     this.dWatch = setInterval(()=>{
       if(!this.isHost || this.state.phase!=='dDraw' || this.state.g.round!==r){ clearInterval(this.dWatch); return; }
@@ -917,6 +1046,27 @@ class Game {
       }
       if(Date.now() >= this.state.g.drawEndAt){ clearInterval(this.dWatch); this.dHostReveal(r); }
     }, 500);
+  }
+  // Host-only: a bot drawer can't actually draw, so it "performs" a small
+  // recognizable doodle via the same stroke pipeline real strokes use —
+  // broadcast for other real players, and drawn directly onto the host's
+  // own canvas context too (broadcasts never echo back to their sender).
+  dBotDraw(drawerId, r){
+    if(!this.isHost) return;
+    const doodle = DOODLE_BUILDERS[Math.floor(Math.random()*DOODLE_BUILDERS.length)]();
+    const segs = [];
+    doodle.forEach(stroke=>{ for(let i=1;i<stroke.length;i++) segs.push([stroke[i-1], stroke[i]]); });
+    const color = INK, size = 6;
+    let i = 0;
+    const step = ()=>{
+      if(!this.isHost || this.state.phase!=='dDraw' || this.state.g.round!==r || this.state.g.drawerOf[r]!==drawerId) return;
+      if(i >= segs.length) return;
+      const [from,to] = segs[i++];
+      this.send('stroke', { points:[from,to], color, size });
+      if(this.dCtx && this.dCanvasEl) this.dDrawSegment(this.dCtx, from, to, color, size, this.dCanvasEl);
+      this.later(step, 80);
+    };
+    this.later(step, 600);
   }
   dHostReveal(r){
     if(!this.isHost) return;
@@ -959,7 +1109,11 @@ class Game {
     const ms = Date.now() - startedAt;
     if(this.isHost) this.dHostGuess(this.myId, text, ms, r);
     else this.sendAction('dGuess', { id:this.myId, round:r, text, ms });
-    this.renderScreen();
+    // Clear the input in place — a full renderScreen() here would remount
+    // the canvas and wipe out everything drawn so far (strokes are never
+    // stored/replayed, only painted live).
+    const inputEl = this.root.querySelector('[data-role="d-guess-input"]');
+    if(inputEl) inputEl.value = '';
   }
   // Host-only: the only place the guess is actually checked against the
   // secret word — guessers' own clients never know it.
@@ -973,7 +1127,7 @@ class Game {
     if(correct){
       this.state.g.correctOrder[r] = [...(this.state.g.correctOrder[r]||[]), {id, ms}];
       const p = this.playerById(id);
-      if(p) this.toast('🎉 ¡'+p.name.toUpperCase()+' ADIVINÓ!', MINT);
+      if(p) this.toast('¡'+p.name.toUpperCase()+' ADIVINÓ!', MINT);
       const guessers = this.players().length - 1;
       if(this.state.g.correctOrder[r].length >= guessers){ this.later(()=>this.dHostReveal(r), 1200); }
     }
@@ -1078,7 +1232,7 @@ class Game {
         <div style="width:22px;height:22px;flex:0 0 auto">${avatarSVG(p.avatar,22)}</div>
         <div style="font-size:13px;font-weight:700;color:var(--muted)">${esc(p.name)}:</div>
         <div style="flex:1;min-width:0;font-size:14px;font-weight:800;overflow-wrap:anywhere">${esc(g.text)}</div>
-        ${g.correct?`<div style="flex:0 0 auto;font-size:14px">✓</div>`:''}
+        ${g.correct?`<div style="flex:0 0 auto">${this.iconCheckSmall()}</div>`:''}
       </div>`;
     }).join('') || `<div style="text-align:center;color:var(--muted);font-size:13px;font-weight:700;padding:10px 0">Nadie escribió todavía…</div>`;
     return `<div data-el="dGuessFeed" style="display:flex;flex-direction:column;gap:2px;max-height:220px;overflow-y:auto">${rows}</div>`;
@@ -1104,7 +1258,7 @@ class Game {
     this.root.querySelectorAll('[data-el="dColorBtn"]').forEach(b=>{ b.style.boxShadow = b.dataset.color===this.local.dColor && this.local.dTool==='brush' ? `0 0 0 3px #fff, 0 0 0 5px ${INK}` : 'none'; });
     this.root.querySelectorAll('[data-el="dSizeBtn"]').forEach(b=>{ const on = Number(b.dataset.size)===this.local.dSize; b.style.background = on?INK:'#fff'; b.style.color = on?'var(--cream)':INK; });
     const eraserBtn = this.root.querySelector('[data-el="dEraserBtn"]');
-    if(eraserBtn){ const on = this.local.dTool==='eraser'; eraserBtn.style.background = on?INK:'#fff'; eraserBtn.style.color = on?'var(--cream)':INK; }
+    if(eraserBtn){ const on = this.local.dTool==='eraser'; eraserBtn.style.background = on?INK:'#fff'; eraserBtn.innerHTML = this.iconEraser(16, on?'var(--cream)':INK); }
   }
 
   /* ---------- local per-client timer for round screen ---------- */
@@ -1212,13 +1366,13 @@ class Game {
 
   renderHud(){
     if(!this.hudRoot) return;
-    const soundBtn = `<button data-action="toggleSound" aria-label="Sonido" style="width:44px;height:44px;border-radius:50%;border:2px solid ${INK};background:#fff;box-shadow:0 3px 0 ${INK};display:flex;align-items:center;justify-content:center;font-size:18px">${this.soundOn?'🔊':'🔇'}</button>`;
+    const soundBtn = `<button data-action="toggleSound" aria-label="Sonido" style="width:44px;height:44px;border-radius:50%;border:2px solid ${INK};background:#fff;box-shadow:0 3px 0 ${INK};display:flex;align-items:center;justify-content:center">${this.soundOn?this.iconSoundOn(19):this.iconSoundOff(19)}</button>`;
     let chatFab = '';
     if(this.state){
       const badge = this.local.chatUnread>0 ? `<div style="position:absolute;top:-4px;right:-4px;min-width:20px;height:20px;padding:0 5px;border-radius:999px;background:${CORAL};border:2px solid ${INK};color:${INK};font-size:11px;font-weight:800;display:flex;align-items:center;justify-content:center">${this.local.chatUnread>9?'9+':this.local.chatUnread}</div>` : '';
       chatFab = `<div style="position:fixed;right:16px;bottom:16px;z-index:70">
         <div style="position:relative">
-          <button data-action="toggleChat" aria-label="Chat" style="width:54px;height:54px;border-radius:50%;border:2.5px solid ${INK};background:${this.local.chatOpen?INK:CORAL};color:${this.local.chatOpen?'var(--cream)':INK};box-shadow:0 4px 0 ${INK};display:flex;align-items:center;justify-content:center;font-size:24px">${this.local.chatOpen?'✕':'💬'}</button>
+          <button data-action="toggleChat" aria-label="Chat" style="width:54px;height:54px;border-radius:50%;border:2.5px solid ${INK};background:${this.local.chatOpen?INK:CORAL};color:${this.local.chatOpen?'var(--cream)':INK};box-shadow:0 4px 0 ${INK};display:flex;align-items:center;justify-content:center">${this.local.chatOpen?this.iconClose(20,'var(--cream)'):this.iconChat(23)}</button>
           ${badge}
         </div>
       </div>`;
@@ -1241,7 +1395,7 @@ class Game {
       <div id="chatScroll" style="flex:1;min-height:120px;overflow-y:auto;padding:12px 14px;display:flex;flex-direction:column;gap:10px">${rows}</div>
       <div style="display:flex;gap:8px;padding:10px;border-top:2px solid var(--line)">
         <input data-role="chat-input" value="${esc(this.local.chatDraft)}" placeholder="Escribí algo…" autocomplete="off" style="flex:1;min-width:0;height:44px;border-radius:14px;border:2px solid ${INK};background:#fff;padding:0 14px;font-size:15px;font-weight:600;color:${INK};outline:none">
-        <button data-action="sendChat" aria-label="Enviar" style="flex:0 0 auto;width:44px;height:44px;border-radius:14px;border:2px solid ${INK};background:${INK};color:var(--cream);font-size:18px">➤</button>
+        <button data-action="sendChat" aria-label="Enviar" style="flex:0 0 auto;width:44px;height:44px;border-radius:14px;border:2px solid ${INK};background:${INK};display:flex;align-items:center;justify-content:center">${this.iconSend(18)}</button>
       </div>
     </div>`;
     const scroller = this.chatRoot.querySelector('#chatScroll');
@@ -1355,6 +1509,8 @@ class Game {
         else if(this.state.gameId==='tuttifrutti') this.tfStartGame();
       },
       copyCode: ()=>{ try{ navigator.clipboard.writeText(this.state.code); }catch(e){} this.toast('Código copiado', MINT); },
+      addBot: ()=>this.addBot(),
+      removeBot: (t)=>this.removeBot(t.dataset.pid),
       // --- portal: host picking / configuring a game from the lobby ---
       pickGame: (t)=>{ this.local.hostFlow = t.dataset.game; this.renderScreen(); },
       backToPicker: ()=>{ this.local.hostFlow = null; this.renderScreen(); },
@@ -1401,10 +1557,15 @@ class Game {
       revealAll: ()=>{ clearInterval(this.revealTick); this.local.reveal = this.groups(this.state.g.round).length; this.renderScreen(); },
       goScore: ()=>{ this.local.screen='score'; this.local.selPid=this.myId; this.renderScreen(); },
       goRanking: ()=>{
+        // Host-authoritative broadcast (like every other round transition) so
+        // every player gets taken to the ranking screen together, instead of
+        // only the host navigating locally while guests wait on reveal forever.
+        if(!this.isHost || !this.state) return;
         const map = {unanimo:'ranking', tuttifrutti:'tfRanking', dibujalo:'dRanking'};
-        this.local.screen = map[this.state.gameId] || 'ranking';
-        this.local.rankPhase=0; this.renderScreen();
-        this.later(()=>{ this.local.rankPhase=1; this.renderScreen(); },900);
+        const phase = map[this.state.gameId]; if(!phase) return;
+        this.state.phase = phase;
+        this.state.stage = (this.state.stage||0) + 1;
+        this.broadcastState();
       },
       selectPlayer: (t)=>{ this.local.selPid = t.dataset.pid; this.renderScreen(); },
       nextRound: ()=>{
@@ -1531,6 +1692,9 @@ class Game {
   }
 
   avatarPicker(compact){
+    return `<div data-role="avatar-picker" data-compact="${compact?1:0}">${this.avatarPickerInner(compact)}</div>`;
+  }
+  avatarPickerInner(compact){
     const av = this.local.avatar;
     const previewSize = compact ? 76 : 96;
     const rows = AVATAR_TRAITS.map(t=>{
@@ -1554,6 +1718,12 @@ class Game {
     </div>`;
   }
   refreshAvatarUI(){
+    // Patch just the avatar picker's own markup in place — re-rendering the
+    // whole modal/screen would recreate the .modal element and replay its
+    // "pop" entrance animation on every single arrow click.
+    const el = (this.modalRoot && this.modalRoot.querySelector('[data-role="avatar-picker"]'))
+      || (this.root && this.root.querySelector('[data-role="avatar-picker"]'));
+    if(el){ el.innerHTML = this.avatarPickerInner(el.dataset.compact==='1'); return; }
     if(this.local.showJoinName) this.renderModals();
     else this.renderScreen();
   }
@@ -1568,14 +1738,13 @@ class Game {
         <div style="position:absolute;top:2%;left:2%;animation:float 5s ease-in-out infinite"><div style="padding:9px 16px;border-radius:18px 18px 18px 4px;background:${CORAL};border:2px solid ${INK};font-weight:800;font-size:16px;transform:rotate(-8deg)">Che</div></div>
         <div style="position:absolute;top:4%;right:2%;animation:float 6s ease-in-out .8s infinite"><div style="padding:9px 16px;border-radius:18px 18px 4px 18px;background:#fff;border:2px solid ${INK};font-weight:800;font-size:16px;transform:rotate(6deg)">Dale</div></div>
       </div>
-      <div style="position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;gap:14px;padding-top:28px">
+      <div style="position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;gap:14px;padding-top:clamp(44px,9vh,84px)">
         <div style="display:flex;gap:clamp(4px,1.2vw,8px)">
           ${letters.map((ch,i)=>`<div style="animation:drop .6s cubic-bezier(.3,1.5,.5,1) ${(i*0.06).toFixed(2)}s both"><div style="width:clamp(46px,13vw,76px);height:clamp(56px,15.5vw,90px);border-radius:14px;background:${colors[i]};border:2.5px solid ${INK};box-shadow:0 5px 0 ${INK};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:clamp(30px,9vw,54px);transform:rotate(${rots[i]}deg)">${ch}</div></div>`).join('')}
         </div>
         <div class="heading" style="font-size:clamp(20px,5.5vw,26px);text-align:center;animation:rise .5s .4s both">Party games para jugar con amigos.</div>
       </div>
-      <div style="position:relative;z-index:1;display:flex;flex-direction:column;gap:12px;padding-top:22px">
-        <div style="font-size:13px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);padding:0 4px">Elegí un juego para arrancar</div>
+      <div style="position:relative;z-index:1;display:flex;flex-direction:column;gap:12px;padding-top:30px">
         <div style="display:flex;flex-wrap:wrap;justify-content:center;gap:14px">${gameCards}</div>
       </div>
       <div style="position:relative;z-index:1;width:100%;max-width:460px;margin:0 auto;display:flex;flex-direction:column;gap:14px;padding-top:22px;padding-bottom:24px">
@@ -1622,21 +1791,27 @@ class Game {
     const hostId = s.hostId;
     const n = Math.max(6, pl.length);
     const codeChars = s.code.split('').map(c=>`<div style="width:clamp(48px,13vw,64px);height:clamp(58px,15vw,74px);border-radius:14px;background:#fff;border:2.5px solid ${INK};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:clamp(30px,8vw,40px)">${c}</div>`).join('');
+    const canAddBot = this.isHost && s.phase==='lobby' && pl.length < (s.maxPlayers||12);
     const slots = Array.from({length:n},(_,i)=>{
       const p = pl[i];
-      if(!p) return `<div style="display:flex;align-items:center;gap:12px;padding:12px;border-radius:20px;border:2px dashed var(--dashed);animation:breathe 2s ease-in-out infinite"><div style="flex:0 0 auto;width:46px;height:46px;border-radius:50%;border:2px dashed var(--dashed)"></div><div style="font-size:15px;font-weight:700;color:var(--muted)">Esperando…</div></div>`;
-      const tag = p.id===this.myId ? (p.id===hostId?'Vos · Anfitrión':'Vos') : (p.id===hostId?'Anfitrión':'Listo para jugar');
-      return `<div style="display:flex;align-items:center;gap:12px;padding:12px;border-radius:20px;background:#fff;border:2px solid ${INK};box-shadow:0 3px 0 ${INK};animation:pop .45s cubic-bezier(.3,1.5,.5,1) both">
+      if(!p){
+        if(canAddBot) return `<button data-action="addBot" style="display:flex;align-items:center;gap:12px;padding:12px;border-radius:20px;border:2px dashed var(--dashed);background:transparent;text-align:left;cursor:pointer;animation:breathe 2s ease-in-out infinite"><div style="flex:0 0 auto;width:46px;height:46px;border-radius:50%;border:2px dashed var(--dashed);display:flex;align-items:center;justify-content:center">${this.iconRobot(20)}</div><div style="font-size:14px;font-weight:800;color:var(--muted)">+ Agregar IA</div></button>`;
+        return `<div style="display:flex;align-items:center;gap:12px;padding:12px;border-radius:20px;border:2px dashed var(--dashed);animation:breathe 2s ease-in-out infinite"><div style="flex:0 0 auto;width:46px;height:46px;border-radius:50%;border:2px dashed var(--dashed)"></div><div style="font-size:15px;font-weight:700;color:var(--muted)">Esperando…</div></div>`;
+      }
+      const tag = p.isBot ? 'Jugador IA' : (p.id===this.myId ? (p.id===hostId?'Vos · Anfitrión':'Vos') : (p.id===hostId?'Anfitrión':'Listo para jugar'));
+      return `<div style="position:relative;display:flex;align-items:center;gap:12px;padding:12px;border-radius:20px;background:#fff;border:2px solid ${INK};box-shadow:0 3px 0 ${INK};animation:pop .45s cubic-bezier(.3,1.5,.5,1) both">
         <div style="width:46px;height:46px;flex:0 0 auto">${avatarSVG(p.avatar,46)}</div>
-        <div style="min-width:0;display:flex;flex-direction:column;gap:1px"><div style="font-weight:800;font-size:17px;overflow:hidden;text-overflow:ellipsis">${esc(p.name)}</div><div style="font-size:13px;font-weight:600;color:var(--muted)">${tag}</div></div>
+        <div style="min-width:0;display:flex;flex-direction:column;gap:1px"><div style="font-weight:800;font-size:17px;overflow:hidden;text-overflow:ellipsis">${esc(p.name)}</div><div style="display:flex;align-items:center;gap:4px;font-size:13px;font-weight:600;color:var(--muted)">${p.isBot?this.iconRobot(13):''}${tag}</div></div>
+        ${p.isBot && this.isHost && s.phase==='lobby' ? `<button data-action="removeBot" data-pid="${p.id}" aria-label="Quitar bot" style="position:absolute;top:6px;right:6px;width:24px;height:24px;border-radius:50%;border:2px solid ${INK};background:var(--cream);display:flex;align-items:center;justify-content:center">${this.iconClose(11)}</button>` : ''}
       </div>`;
     }).join('');
 
-    let lowerSection;
+    let lowerSection, lowerWide = false;
     if(!s.gameId){
-      lowerSection = this.isHost ? this.viewGamePicker() : `
+      if(this.isHost){ lowerSection = this.viewGamePicker(); lowerWide = true; }
+      else lowerSection = `
         <div style="display:flex;flex-direction:column;align-items:center;gap:10px;text-align:center;padding:24px 0">
-          <div style="font-size:34px">🎮</div>
+          ${this.iconController(34)}
           <div class="heading" style="font-size:20px">${esc(this.playerById(hostId)?.name||'El anfitrión')} está eligiendo el juego…</div>
           <div style="font-size:14px;font-weight:600;color:var(--muted)">Ya te avisamos apenas arranque.</div>
         </div>`;
@@ -1659,19 +1834,21 @@ class Game {
         <div class="sticky-bottom">${bottom}</div>`;
     }
 
-    return `<div class="screen">
+    return `<div class="screen screen-wide">
       <div class="top-bar"><button class="icon-btn" data-action="askLeave" aria-label="Volver">${this.iconBack()}</button><div class="heading" style="font-size:28px">Lobby</div></div>
-      <div style="background:${YEL};border:2.5px solid ${INK};border-radius:28px;box-shadow:0 6px 0 ${INK};padding:22px 20px;display:flex;flex-direction:column;align-items:center;gap:16px">
-        <div style="font-size:13px;font-weight:800;letter-spacing:.14em;text-transform:uppercase">Código de la partida</div>
-        <div style="display:flex;gap:8px">${codeChars}</div>
-        <button data-action="copyCode" style="height:48px;padding:0 20px;border-radius:14px;border:2px solid ${INK};background:${INK};color:var(--cream);display:flex;align-items:center;gap:10px;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:16px;letter-spacing:.05em">${this.iconCopy()}COPIAR CÓDIGO</button>
+      <div style="width:100%;max-width:720px;margin:0 auto;display:flex;flex-direction:column;gap:18px">
+        <div style="background:${YEL};border:2.5px solid ${INK};border-radius:28px;box-shadow:0 6px 0 ${INK};padding:22px 20px;display:flex;flex-direction:column;align-items:center;gap:16px">
+          <div style="font-size:13px;font-weight:800;letter-spacing:.14em;text-transform:uppercase">Código de la partida</div>
+          <div style="display:flex;gap:8px">${codeChars}</div>
+          <button data-action="copyCode" style="height:48px;padding:0 20px;border-radius:14px;border:2px solid ${INK};background:${INK};color:var(--cream);display:flex;align-items:center;gap:10px;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:16px;letter-spacing:.05em">${this.iconCopy()}COPIAR CÓDIGO</button>
+        </div>
+        <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px">
+          <div class="heading" style="font-size:22px">Jugadores</div>
+          <div class="heading" style="font-size:22px">${pl.length}</div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px">${slots}</div>
       </div>
-      <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px">
-        <div class="heading" style="font-size:22px">Jugadores</div>
-        <div class="heading" style="font-size:22px">${pl.length}</div>
-      </div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px">${slots}</div>
-      <div style="display:flex;flex-direction:column;gap:14px">${lowerSection}</div>
+      <div style="display:flex;flex-direction:column;gap:14px;${lowerWide?'':'width:100%;max-width:720px;margin:0 auto'}">${lowerSection}</div>
     </div>`;
   }
 
@@ -1699,8 +1876,8 @@ class Game {
         <div style="font-size:14px;font-weight:600;color:var(--muted);line-height:1.35">${esc(g.tagline)}</div>
       </div>
       <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:2px">
-        <div style="display:flex;align-items:center;gap:5px;padding:6px 12px;border-radius:999px;background:var(--cream);border:2px solid var(--line);font-size:13px;font-weight:700">👤 ${g.min}–${g.max} jugadores</div>
-        <div style="display:flex;align-items:center;gap:5px;padding:6px 12px;border-radius:999px;background:var(--cream);border:2px solid var(--line);font-size:13px;font-weight:700">⏱️ ≈ ${est} min</div>
+        <div style="display:flex;align-items:center;gap:5px;padding:6px 12px;border-radius:999px;background:var(--cream);border:2px solid var(--line);font-size:13px;font-weight:700">${this.iconPersonSmall(13)} ${g.min}–${g.max} jugadores</div>
+        <div style="display:flex;align-items:center;gap:5px;padding:6px 12px;border-radius:999px;background:var(--cream);border:2px solid var(--line);font-size:13px;font-weight:700">${this.iconClock(14)} ≈ ${est} min</div>
       </div>
     </button>`;
   }
@@ -1716,7 +1893,7 @@ class Game {
     return `<div class="screen screen-narrow">
       <div class="top-bar"><button class="icon-btn" data-action="backToPicker" aria-label="Volver">${this.iconBack()}</button><div class="heading" style="font-size:28px">${esc(meta.name)}</div></div>
       <div style="display:flex;flex-direction:column;align-items:center;gap:10px;text-align:center;padding:40px 0">
-        <div style="font-size:40px">🚧</div>
+        ${this.iconSoon(40)}
         <div class="heading" style="font-size:20px">Muy pronto</div>
       </div>
     </div>`;
@@ -1748,7 +1925,7 @@ class Game {
       </div>
       <div class="sticky-bottom">
         <div style="text-align:center;font-size:14px;font-weight:700;color:var(--muted)">${estimate}</div>
-        <button class="btn-primary" data-action="confirmUnanimoConfig">LISTO, VOLVER AL LOBBY</button>
+        <button class="btn-primary" data-action="confirmUnanimoConfig">SIGUIENTE</button>
       </div>
     </div>`;
   }
@@ -1760,7 +1937,7 @@ class Game {
     const timeOpts = [30,45,60,90,120].map(n=>`<button data-action="tfSetTime" data-val="${n}" style="height:48px;border-radius:14px;border:2px solid ${INK};background:${cfg.time===n?INK:'#fff'};color:${cfg.time===n?'var(--cream)':INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:16px">${n}s</button>`).join('');
     const catChips = TUTTI_CATEGORIES.map(c=>{
       const on = cfg.categories.includes(c.id);
-      return `<button data-action="tfToggleCategory" data-cat="${c.id}" style="display:flex;align-items:center;gap:8px;padding:10px 14px;border-radius:14px;border:2px solid ${INK};background:${on?MINT:'#fff'};font-weight:800;font-size:14px">${c.icon} ${esc(c.label)}</button>`;
+      return `<button data-action="tfToggleCategory" data-cat="${c.id}" style="display:flex;align-items:center;gap:8px;padding:10px 14px;border-radius:14px;border:2px solid ${INK};background:${on?MINT:'#fff'};font-weight:800;font-size:14px">${this.tfCatIcon(c.id,16)} ${esc(c.label)}</button>`;
     }).join('');
     const estimate = '≈ '+Math.max(1,Math.round(cfg.rounds*(cfg.time+40)/60))+' min de juego';
     return `<div class="screen screen-narrow">
@@ -1785,7 +1962,7 @@ class Game {
       </div>
       <div class="sticky-bottom">
         <div style="text-align:center;font-size:14px;font-weight:700;color:var(--muted)">${estimate}</div>
-        <button class="btn-primary" data-action="confirmTfConfig">LISTO, VOLVER AL LOBBY</button>
+        <button class="btn-primary" data-action="confirmTfConfig">SIGUIENTE</button>
       </div>
     </div>`;
   }
@@ -1796,14 +1973,16 @@ class Game {
       return `<div style="min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;text-align:center;padding:20px">
         <div style="font-size:15px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)">RONDA ${s.g.round+1}</div>
         <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:15px;letter-spacing:.1em;text-transform:uppercase;animation:rise .3s both">¡LETRA!</div>
-        <div style="width:160px;height:160px;border-radius:32px;background:${YEL};border:3px solid ${INK};box-shadow:0 8px 0 ${INK};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:96px;animation:pop .5s cubic-bezier(.3,1.6,.5,1) both">${esc(s.g.letter)}</div>
+        <div style="width:160px;height:160px;border-radius:32px;background:${YEL};border:3px solid ${INK};box-shadow:0 8px 0 ${INK};display:flex;align-items:center;justify-content:center;overflow:hidden;animation:pop .5s cubic-bezier(.3,1.6,.5,1) both">
+          <span data-el="tfIntroLetter" style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:96px">?</span>
+        </div>
       </div>`;
     }
     const fields = (cfg.categories||[]).map((catId,i)=>{
       const cat = TUTTI_CATEGORIES.find(c=>c.id===catId);
       const v = this.local.tfInputs[catId] || '';
       return `<div style="position:relative;display:flex;align-items:center">
-        <div style="position:absolute;left:13px;width:32px;height:32px;border-radius:10px;background:${v?MINT:'#F1E7D8'};border:2px solid ${INK};display:flex;align-items:center;justify-content:center;font-size:16px;pointer-events:none">${cat?cat.icon:'❔'}</div>
+        <div style="position:absolute;left:13px;width:32px;height:32px;border-radius:10px;background:${v?MINT:'#F1E7D8'};border:2px solid ${INK};display:flex;align-items:center;justify-content:center;pointer-events:none">${cat?this.tfCatIcon(cat.id,17):this.iconQuestion(16)}</div>
         <input class="field-input" data-role="tf-input" data-cat="${catId}" data-index="${i}" value="${esc(v)}" placeholder="${cat?cat.label:catId}" autocomplete="off" enterkeyhint="next" style="border-color:${v?INK:'#DCCFBC'}">
       </div>`;
     }).join('');
@@ -1823,7 +2002,7 @@ class Game {
         </div>
         ${fields}
         <div class="sticky-bottom" style="margin:0 -20px;padding:16px 20px 20px">
-          <button class="btn-primary" data-action="tfPressStop" style="height:66px;font-size:26px;background:${CORAL}">🛑 STOP</button>
+          <button class="btn-primary" data-action="tfPressStop" style="height:66px;font-size:26px;background:${CORAL};display:flex;align-items:center;justify-content:center;gap:10px">${this.iconStopSign(24)} STOP</button>
         </div>
       </div>
     </div>`;
@@ -1848,12 +2027,12 @@ class Game {
         return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0">
           <div style="width:28px;height:28px;flex:0 0 auto">${avatarSVG(p.avatar,28)}</div>
           <div style="flex:1;min-width:0;font-weight:800;font-size:16px;overflow-wrap:anywhere">${esc(disp(item.text))} <span style="font-weight:600;font-size:12px;color:var(--muted)">— ${esc(p.name)}</span></div>
-          <div style="flex:0 0 auto;padding:3px 9px;border-radius:999px;background:${item.valid?MINT:'var(--dup-bg)'};border:2px solid ${INK};font-weight:800;font-size:12px">${item.valid?'+'+item.pts:'✕'}</div>
-          ${p.id!==this.myId?`<button data-action="tfFlag" data-cat="${catId}" data-pid="${p.id}" aria-label="Marcar inválida" style="flex:0 0 auto;width:28px;height:28px;border-radius:8px;border:2px solid ${flaggedByMe?CORAL:'var(--line)'};background:${flaggedByMe?'#FFEDE6':'#fff'};font-size:13px">🚩</button>`:''}
+          <div style="flex:0 0 auto;display:flex;align-items:center;padding:3px 9px;border-radius:999px;background:${item.valid?MINT:'var(--dup-bg)'};border:2px solid ${INK};font-weight:800;font-size:12px">${item.valid?'+'+item.pts:this.iconClose(11)}</div>
+          ${p.id!==this.myId?`<button data-action="tfFlag" data-cat="${catId}" data-pid="${p.id}" aria-label="Marcar inválida" style="flex:0 0 auto;width:28px;height:28px;border-radius:8px;border:2px solid ${flaggedByMe?CORAL:'var(--line)'};background:${flaggedByMe?'#FFEDE6':'#fff'};display:flex;align-items:center;justify-content:center">${this.iconFlag(14, flaggedByMe?CORAL:INK)}</button>`:''}
         </div>`;
       }).join('');
       return `<div class="card" style="padding:14px 16px">
-        <div style="font-weight:800;font-size:15px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding-bottom:6px">${cat?cat.icon+' '+cat.label:catId}</div>
+        <div style="display:flex;align-items:center;gap:6px;font-weight:800;font-size:15px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding-bottom:6px">${cat?this.tfCatIcon(cat.id,15):''} ${cat?esc(cat.label):esc(catId)}</div>
         ${rows}
       </div>`;
     }).join('');
@@ -1865,7 +2044,7 @@ class Game {
       <div style="display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center">
         <div style="font-size:13px;font-weight:800;letter-spacing:.14em;text-transform:uppercase">¿QUÉ PUSIERON?</div>
         <div style="padding:8px 22px;border-radius:18px;background:${YEL};border:2.5px solid ${INK};box-shadow:0 4px 0 ${INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:36px">${esc(s.g.letter)}</div>
-        <div style="font-size:13px;font-weight:700;color:var(--muted)">Tocá 🚩 si te parece que una respuesta no vale</div>
+        <div style="display:flex;align-items:center;justify-content:center;gap:6px;font-size:13px;font-weight:700;color:var(--muted)">Tocá ${this.iconFlag(13)} si te parece que una respuesta no vale</div>
       </div>
       <div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:center">${totalsRow}</div>
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px">${catBlocks}</div>
@@ -1988,7 +2167,7 @@ class Game {
           <div style="flex:1 1 420px;min-width:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px">${statsHtml}</div>
         </div>
         <div class="sticky-bottom">
-          <div style="max-width:520px;margin:0 auto;display:flex;flex-direction:column;gap:12px">${bottom}</div>
+          <div style="max-width:480px;margin:0 auto;padding:0 14px;display:flex;flex-direction:column;gap:12px">${bottom}</div>
         </div>
       </div>
     </div>`;
@@ -2031,7 +2210,7 @@ class Game {
       </div>
       <div class="sticky-bottom">
         <div style="text-align:center;font-size:14px;font-weight:700;color:var(--muted)">${estimate}</div>
-        <button class="btn-primary" data-action="confirmDibujaloConfig">LISTO, VOLVER AL LOBBY</button>
+        <button class="btn-primary" data-action="confirmDibujaloConfig">SIGUIENTE</button>
       </div>
     </div>`;
   }
@@ -2044,7 +2223,7 @@ class Game {
     if(!isMe){
       return `<div style="min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;text-align:center;padding:20px">
         <div style="width:64px;height:64px;flex:0 0 auto">${avatarSVG(drawer&&drawer.avatar,64)}</div>
-        <div class="heading" style="font-size:22px">🎨 ${esc(drawer?drawer.name.toUpperCase():'?')} ESTÁ ELIGIENDO...</div>
+        <div class="heading" style="display:flex;align-items:center;gap:8px;font-size:22px">${this.iconPalette(22)} ${esc(drawer?drawer.name.toUpperCase():'?')} ESTÁ ELIGIENDO...</div>
         ${timerChip}
       </div>`;
     }
@@ -2053,13 +2232,13 @@ class Game {
       return `<div style="min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;text-align:center;padding:20px"><div class="spinner"></div><div style="font-weight:700;color:var(--muted)">Preparando tus opciones…</div></div>`;
     }
     const cards = opts.map((o,i)=>`<button data-action="dChooseOption" data-i="${i}" style="display:flex;flex-direction:column;align-items:center;gap:8px;padding:20px 14px;border-radius:22px;background:#fff;border:2.5px solid ${INK};box-shadow:0 5px 0 ${INK};transition:transform .08s,box-shadow .08s" style-active="transform:translateY(4px);box-shadow:0 1px 0 ${INK}">
-      <div style="font-size:40px">${o.emoji||'🎨'}</div>
+      <div style="font-size:40px">${o.emoji||this.iconPalette(34)}</div>
       <div class="heading" style="font-size:20px;text-align:center">${esc(o.word.toUpperCase())}</div>
       <div style="font-size:12px;font-weight:700;color:var(--muted)">${esc(o.category)}</div>
     </button>`).join('');
     return `<div class="screen screen-narrow">
       <div style="display:flex;flex-direction:column;align-items:center;gap:8px;text-align:center;padding-top:10px">
-        <div style="font-size:14px;font-weight:800;letter-spacing:.1em;text-transform:uppercase">🎨 Elegí qué dibujar</div>
+        <div style="display:flex;align-items:center;gap:6px;font-size:14px;font-weight:800;letter-spacing:.1em;text-transform:uppercase">${this.iconPalette(16)} Elegí qué dibujar</div>
         ${timerChip}
       </div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px">${cards}</div>
@@ -2078,19 +2257,19 @@ class Game {
     const colors = [INK, CORAL, YEL, MINT, VIOLET, BLUE, PINK, '#fff'];
     const colorBtns = colors.map(c=>`<button data-action="dSetColor" data-color="${c}" data-el="dColorBtn" aria-label="Color" style="width:30px;height:30px;border-radius:50%;background:${c};border:2px solid ${INK};box-shadow:${c===this.local.dColor&&this.local.dTool==='brush'?`0 0 0 3px #fff, 0 0 0 5px ${INK}`:'none'};flex:0 0 auto"></button>`).join('');
     const sizeBtns = [3,6,12].map(sz=>`<button data-action="dSetSize" data-size="${sz}" data-el="dSizeBtn" style="width:34px;height:34px;border-radius:10px;border:2px solid ${INK};background:${sz===this.local.dSize?INK:'#fff'};color:${sz===this.local.dSize?'var(--cream)':INK};display:flex;align-items:center;justify-content:center"><span style="width:${sz}px;height:${sz}px;border-radius:50%;background:currentColor"></span></button>`).join('');
-    const hintChip = (s.g.hintUsed[r] && !isMe) ? `<div style="padding:6px 14px;border-radius:999px;background:${YEL};border:2px solid ${INK};font-weight:800;font-size:13px">💡 ${esc(s.g.category[r]||'')}</div>` : '';
+    const hintChip = (s.g.hintUsed[r] && !isMe) ? `<div style="display:flex;align-items:center;gap:6px;padding:6px 14px;border-radius:999px;background:${YEL};border:2px solid ${INK};font-weight:800;font-size:13px">${this.iconBulb(14)} ${esc(s.g.category[r]||'')}</div>` : '';
     const toolbar = isMe ? `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px;background:#fff;border:2px solid ${INK};border-radius:16px">
         <div style="display:flex;gap:6px;flex-wrap:wrap">${colorBtns}</div>
         <div style="width:2px;height:24px;background:var(--line)"></div>
         <div style="display:flex;gap:6px">${sizeBtns}</div>
         <div style="width:2px;height:24px;background:var(--line)"></div>
-        <button data-action="dSetTool" data-tool="eraser" data-el="dEraserBtn" style="height:34px;padding:0 12px;border-radius:10px;border:2px solid ${INK};background:${this.local.dTool==='eraser'?INK:'#fff'};color:${this.local.dTool==='eraser'?'var(--cream)':INK};font-weight:800;font-size:13px">🧽</button>
-        <button data-action="dClearCanvas" style="height:34px;padding:0 12px;border-radius:10px;border:2px solid ${INK};background:#fff;font-weight:800;font-size:13px">🗑️</button>
+        <button data-action="dSetTool" data-tool="eraser" data-el="dEraserBtn" aria-label="Borrador" style="height:34px;width:38px;border-radius:10px;border:2px solid ${INK};background:${this.local.dTool==='eraser'?INK:'#fff'};display:flex;align-items:center;justify-content:center">${this.iconEraser(16, this.local.dTool==='eraser'?'var(--cream)':INK)}</button>
+        <button data-action="dClearCanvas" aria-label="Borrar todo" style="height:34px;width:38px;border-radius:10px;border:2px solid ${INK};background:#fff;display:flex;align-items:center;justify-content:center">${this.iconTrash(16)}</button>
       </div>` : '';
     const guessArea = isMe
-      ? `<div style="text-align:center;font-size:13px;font-weight:700;color:var(--muted)">Mirá cómo va la adivinanza mientras dibujás 👀</div>`
+      ? `<div style="text-align:center;font-size:13px;font-weight:700;color:var(--muted)">Mirá cómo va la adivinanza mientras dibujás</div>`
       : already
-        ? `<div style="display:flex;align-items:center;justify-content:center;gap:8px;height:52px;border-radius:16px;background:${MINT};border:2px solid ${INK};font-weight:800;font-size:16px">✓ ¡ACERTASTE!</div>`
+        ? `<div style="display:flex;align-items:center;justify-content:center;gap:8px;height:52px;border-radius:16px;background:${MINT};border:2px solid ${INK};font-weight:800;font-size:16px">${this.iconCheckSmall()} ¡ACERTASTE!</div>`
         : `<div style="display:flex;gap:8px">
             <input data-role="d-guess-input" value="${esc(this.local.dGuessDraft)}" placeholder="¿Qué es?" autocomplete="off" style="flex:1;min-width:0;height:52px;border-radius:16px;border:2px solid ${INK};background:#fff;padding:0 16px;font-size:17px;font-weight:700;color:${INK};outline:none">
             <button data-action="dSendGuess" style="flex:0 0 auto;height:52px;padding:0 22px;border-radius:16px;border:2px solid ${INK};background:${CORAL};font-weight:800;font-size:16px">ADIVINAR</button>
@@ -2099,7 +2278,7 @@ class Game {
       <div style="position:sticky;top:0;z-index:10;background:var(--cream)">
         <div style="max-width:1080px;margin:0 auto;padding:12px 20px;display:flex;align-items:center;gap:12px">
           <button class="icon-btn" data-action="askLeave" aria-label="Salir">${this.iconClose()}</button>
-          <div style="flex:1;min-width:0;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:18px">${isMe?'🎨 Estás dibujando':'🎨 '+esc(drawer?drawer.name:'?')+' está dibujando'}</div>
+          <div style="flex:1;min-width:0;display:flex;align-items:center;gap:8px;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:18px">${this.iconPalette(18)}${isMe?'Estás dibujando':esc(drawer?drawer.name:'?')+' está dibujando'}</div>
           <div data-el="dTimerBox" style="display:flex;align-items:center;gap:8px;height:46px;padding:0 14px;border-radius:999px;border:2px solid ${INK};background:#fff;box-shadow:0 3px 0 ${INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:22px">${this.iconClock()}<span data-el="dTimerText">${mmss(cfg.drawTime)}</span></div>
         </div>
       </div>
@@ -2142,7 +2321,7 @@ class Game {
       : `<div style="height:54px;border-radius:16px;border:2px solid ${INK};background:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;color:var(--muted)">Esperando al anfitrión…</div>`;
     return `<div class="screen screen-narrow">
       <div style="display:flex;flex-direction:column;align-items:center;gap:10px;text-align:center">
-        <div style="font-size:14px;font-weight:800;letter-spacing:.14em;text-transform:uppercase">${nobodyGuessed?'😭 NADIE LO ADIVINÓ':'🎉 ¡SE ACABÓ LA RONDA!'}</div>
+        <div style="display:flex;align-items:center;gap:8px;font-size:14px;font-weight:800;letter-spacing:.14em;text-transform:uppercase">${nobodyGuessed?this.iconSad(18):this.iconParty(18)}${nobodyGuessed?'NADIE LO ADIVINÓ':'¡SE ACABÓ LA RONDA!'}</div>
         <div style="font-size:13px;font-weight:700;color:var(--muted)">LA PALABRA ERA</div>
         <div style="padding:10px 26px;border-radius:20px;background:${YEL};border:2.5px solid ${INK};box-shadow:0 5px 0 ${INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:clamp(32px,9vw,48px)">${esc((s.g.word[r]||'').toUpperCase())}</div>
         ${nobodyGuessed?`<div style="font-size:14px;font-weight:700;color:var(--muted);font-style:italic">${esc(dibujaloFunnyLine())}</div>`:''}
@@ -2264,7 +2443,7 @@ class Game {
           <div style="flex:1 1 420px;min-width:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px">${statsHtml}</div>
         </div>
         <div class="sticky-bottom">
-          <div style="max-width:520px;margin:0 auto;display:flex;flex-direction:column;gap:12px">${bottom}</div>
+          <div style="max-width:480px;margin:0 auto;padding:0 14px;display:flex;flex-direction:column;gap:12px">${bottom}</div>
         </div>
       </div>
     </div>`;
@@ -2569,7 +2748,7 @@ class Game {
           <div style="flex:1 1 420px;min-width:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px">${statsHtml}</div>
         </div>
         <div class="sticky-bottom">
-          <div style="max-width:520px;margin:0 auto;display:flex;flex-direction:column;gap:12px">${bottom}</div>
+          <div style="max-width:480px;margin:0 auto;padding:0 14px;display:flex;flex-direction:column;gap:12px">${bottom}</div>
         </div>
       </div>
     </div>`;
@@ -2577,11 +2756,48 @@ class Game {
 
   /* ---------- icons ---------- */
   iconBack(){ return `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="${INK}" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"></path></svg>`; }
-  iconClose(){ return `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="${INK}" stroke-width="2.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg>`; }
+  iconClose(px, color){ return `<svg width="${px||18}" height="${px||18}" viewBox="0 0 24 24" fill="none" stroke="${color||INK}" stroke-width="2.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg>`; }
   iconClock(){ return `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="${INK}" stroke-width="2.6" stroke-linecap="round"><circle cx="12" cy="13" r="8"></circle><path d="M12 9v4l2.5 2M9 2h6"></path></svg>`; }
   iconCopy(){ return `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--cream)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="3"></rect><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"></path></svg>`; }
   iconCheckSmall(){ return `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="${INK}" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7"></path></svg>`; }
   iconCheckBig(){ return `<svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="${INK}" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7"></path></svg>`; }
+  _icon(px, color, sw, inner){ return `<svg width="${px}" height="${px}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`; }
+  iconSoundOn(px){ return this._icon(px||18, INK, 2.2, `<path d="M4 10v4h3.5L13 18V6L7.5 10H4z"></path><path d="M17 9.5c1.2 1.2 1.2 3.8 0 5M19.5 7c2.2 2.2 2.2 7.8 0 10"></path>`); }
+  iconSoundOff(px){ return this._icon(px||18, INK, 2.2, `<path d="M4 10v4h3.5L13 18V6L7.5 10H4z"></path><path d="M17 9l5 5M22 9l-5 5"></path>`); }
+  iconChat(px){ return this._icon(px||22, INK, 2.2, `<path d="M4 5h16v10H9l-4 4v-4H4V5z"></path>`); }
+  iconSend(px){ return this._icon(px||18, 'var(--cream)', 2.2, `<path d="M4 12l16-8-6 16-3-6-7-2z"></path>`); }
+  iconRobot(px){ return this._icon(px||16, INK, 2, `<rect x="4" y="9" width="16" height="11" rx="3"></rect><path d="M12 9V5"></path><circle cx="12" cy="3.2" r="1.3" fill="${INK}"></circle><circle cx="8.5" cy="14.5" r="1.2" fill="${INK}"></circle><circle cx="15.5" cy="14.5" r="1.2" fill="${INK}"></circle><path d="M9 18h6"></path>`); }
+  iconFlag(px, color){ return this._icon(px||16, color||INK, 2.2, `<path d="M6 3v18"></path><path d="M6 4h11l-3 4 3 4H6"></path>`); }
+  iconParty(px, color){ return this._icon(px||18, color||INK, 2.2, `<path d="M12 3v3M5 6l2 2M19 6l-2 2M3 13l3-1M21 13l-3-1"></path><path d="M6 21l3-11 9 3-8 9-4-1z"></path>`); }
+  iconSad(px, color){ return this._icon(px||18, color||INK, 2.2, `<circle cx="12" cy="12" r="9"></circle><circle cx="9" cy="10" r="1" fill="${color||INK}"></circle><circle cx="15" cy="10" r="1" fill="${color||INK}"></circle><path d="M8.5 17c1-1.6 2.2-2.4 3.5-2.4s2.5.8 3.5 2.4"></path>`); }
+  iconPalette(px, color){ return this._icon(px||18, color||INK, 2.1, `<path d="M12 4a8 7 0 1 0 0 14c1.3 0 1.8-.9 1.8-1.8 0-.8-.4-1.3-.4-2.1 0-1.1.9-1.8 2.1-1.8H17a3 3 0 0 0 3-3c0-3.5-3.6-6.3-8-6.3z"></path><circle cx="7.8" cy="10" r=".9" fill="${color||INK}"></circle><circle cx="9.2" cy="6.8" r=".9" fill="${color||INK}"></circle><circle cx="13.6" cy="6.6" r=".9" fill="${color||INK}"></circle>`); }
+  iconController(px){ return this._icon(px||24, INK, 2.2, `<rect x="2.5" y="8" width="19" height="10" rx="5"></rect><path d="M7 11v4M5 13h4M15.2 12.2h.01M18 14.2h.01"></path>`); }
+  iconSoon(px){ return this._icon(px||28, INK, 2.2, `<path d="M6 3h12M6 21h12"></path><path d="M7 3c0 5 3 6 5 8-2 2-5 3-5 8M17 3c0 5-3 6-5 8 2 2 5 3 5 8"></path>`); }
+  iconStopSign(px){ return this._icon(px||20, INK, 2.4, `<path d="M8 3h8l5 5v8l-5 5H8l-5-5V8z"></path>`); }
+  iconBulb(px, color){ return this._icon(px||16, color||INK, 2.1, `<path d="M9 18h6M10 21h4"></path><path d="M12 3a6 6 0 0 0-3.5 10.9c.6.4 1 1.1 1 1.9v.2h5v-.2c0-.8.4-1.5 1-1.9A6 6 0 0 0 12 3z"></path>`); }
+  iconEraser(px, color){ return this._icon(px||16, color||INK, 2.1, `<path d="M4 16l9-9 6 6-9 9H7z"></path><path d="M4 16l3.5 3.5H10"></path>`); }
+  iconTrash(px){ return this._icon(px||16, INK, 2.1, `<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"></path><path d="M10 11v6M14 11v6"></path>`); }
+  iconQuestion(px){ return this._icon(px||16, INK, 2.1, `<circle cx="12" cy="12" r="9"></circle><path d="M9.5 9.3c0-1.5 1.2-2.6 2.6-2.6s2.6 1 2.6 2.3c0 1.7-2.6 1.9-2.6 4"></path><circle cx="12" cy="16.6" r="1" fill="${INK}"></circle>`); }
+  iconEye(px){ return this._icon(px||16, INK, 2.1, `<path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z"></path><circle cx="12" cy="12" r="2.6"></circle>`); }
+  iconPersonSmall(px, color){ return this._icon(px||14, color||INK, 2.4, `<circle cx="12" cy="8" r="4"></circle><path d="M4 20c1.5-4 5-6 8-6s6.5 2 8 6"></path>`); }
+  tfCatIcon(id, px){
+    const s = px||18;
+    switch(id){
+      case 'nombre': return this._icon(s, INK, 2.1, `<circle cx="12" cy="8" r="4"></circle><path d="M4 20c1.5-4 5-6 8-6s6.5 2 8 6"></path>`);
+      case 'animal': return this._icon(s, INK, 2.1, `<circle cx="12" cy="15" r="3.4"></circle><circle cx="6" cy="8" r="2"></circle><circle cx="18" cy="8" r="2"></circle><circle cx="9" cy="5" r="2"></circle><circle cx="15" cy="5" r="2"></circle>`);
+      case 'pais': return this._icon(s, INK, 2.1, `<circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"></path>`);
+      case 'ciudad': return this._icon(s, INK, 2.1, `<path d="M4 20V10l4-3 4 3v10M12 20V6l4-3 4 3v14M4 20h16"></path>`);
+      case 'comida': return this._icon(s, INK, 2.1, `<path d="M6 2v8a2 2 0 0 0 4 0V2M8 10v12M18 2c-2 2-2 6 0 8v12"></path>`);
+      case 'objeto': return this._icon(s, INK, 2.1, `<path d="M4 8l8-4 8 4-8 4-8-4zM4 8v9l8 4M20 8v9l-8 4M12 12v9"></path>`);
+      case 'profesion': return this._icon(s, INK, 2.1, `<rect x="3" y="8" width="18" height="12" rx="2"></rect><path d="M9 8V6a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2M3 13h18"></path>`);
+      case 'color': return this.iconPalette(s);
+      case 'pelicula': return this._icon(s, INK, 2.1, `<path d="M3 8l2-4h4l-2 4M9 8l2-4h4l-2 4M15 8l2-4h4l-2 4"></path><rect x="3" y="8" width="18" height="12" rx="1.5"></rect>`);
+      case 'famoso': return this._icon(s, INK, 2.1, `<path d="M12 2l2.6 6.6L21 9l-5 4.3L17.5 20 12 16.3 6.5 20 8 13.3 3 9l6.4-.4z"></path>`);
+      case 'marca': return this._icon(s, INK, 2.1, `<path d="M11 3h6a2 2 0 0 1 2 2v6L11 19 3 11z"></path><circle cx="15.5" cy="7.5" r="1.3" fill="${INK}"></circle>`);
+      case 'planta': return this._icon(s, INK, 2.1, `<path d="M12 21V9"></path><path d="M12 9C12 4 8 3 4 3c0 5 2 8 8 8zM12 12c0-4 4-5 8-5 0 5-2 8-8 8"></path>`);
+      default: return this.iconQuestion(s);
+    }
+  }
 }
 
 const app = document.getElementById('app');

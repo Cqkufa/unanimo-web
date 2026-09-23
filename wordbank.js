@@ -74,18 +74,18 @@ export function pickDibujaloTrio(usedWords, allowedCategories){
 
 /* ================= TUTTI FRUTTI ================= */
 export const TUTTI_CATEGORIES = [
-  {id:'nombre', label:'Nombre', icon:'👤'},
-  {id:'animal', label:'Animal', icon:'🐶'},
-  {id:'pais', label:'País', icon:'🌎'},
-  {id:'ciudad', label:'Ciudad', icon:'🏙️'},
-  {id:'comida', label:'Comida', icon:'🍕'},
-  {id:'objeto', label:'Objeto', icon:'📦'},
-  {id:'profesion', label:'Profesión', icon:'💼'},
-  {id:'color', label:'Color', icon:'🎨'},
-  {id:'pelicula', label:'Película', icon:'🎬'},
-  {id:'famoso', label:'Famoso/a', icon:'⭐'},
-  {id:'marca', label:'Marca', icon:'🏷️'},
-  {id:'planta', label:'Planta', icon:'🌱'},
+  {id:'nombre', label:'Nombre'},
+  {id:'animal', label:'Animal'},
+  {id:'pais', label:'País'},
+  {id:'ciudad', label:'Ciudad'},
+  {id:'comida', label:'Comida'},
+  {id:'objeto', label:'Objeto'},
+  {id:'profesion', label:'Profesión'},
+  {id:'color', label:'Color'},
+  {id:'pelicula', label:'Película'},
+  {id:'famoso', label:'Famoso/a'},
+  {id:'marca', label:'Marca'},
+  {id:'planta', label:'Planta'},
 ];
 // Weighted letter pool: common letters appear more often than rare ones,
 // and truly brutal letters are excluded unless "difícil" mode is on.
