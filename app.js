@@ -4144,7 +4144,7 @@ class Game {
       </div>
       <div class="heading" style="font-size:clamp(28px,8vw,40px)">${esc(gm.name.toUpperCase())}</div>
       <div style="font-size:15px;font-weight:600;color:var(--muted);max-width:340px">${esc(gm.tagline)}</div>
-      ${this.isHost ? `<button class="btn-primary" data-action="rondaBeginSlot" style="margin-top:10px">COMENZAR</button>`
+      ${this.isHost ? `<button class="btn-primary" data-action="rondaBeginSlot" style="margin-top:10px;max-width:360px">COMENZAR</button>`
         : `<div style="margin-top:10px;height:54px;padding:0 24px;border-radius:16px;border:2px solid ${INK};background:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;color:var(--muted)">Esperando al anfitrión…</div>`}
     </div>`;
   }
