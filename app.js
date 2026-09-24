@@ -132,7 +132,26 @@ const GAMES = [
   {id:'tuttifrutti', name:'Tutti Frutti', tagline:'Una letra, varias categorías y un solo grito: ¡STOP!', letters:['T','F'], colors:[MINT,PINK], min:2, max:8, isNew:true},
   {id:'impostor', name:'Impostor', tagline:'Todos comparten una palabra. Uno miente. Descubrilo antes de que sea tarde.', letters:['I','M'], colors:[VIOLET,PINK], min:4, max:12, isNew:true},
 ];
-function gameMeta(id){ return GAMES.find(g=>g.id===id); }
+// Modo Ronda isn't a game itself — it's a meta-mode that chains a sequence
+// of the games above into one match with a shared, accumulating score. It
+// gets its own picker card (rendered separately, starred) but reuses this
+// same {id,name,tagline,letters,colors,min,max} shape for its lobby meta
+// card, so it's listed here too and just filtered out of the "pick one
+// game" grids.
+const RONDA_META = {id:'ronda', name:'Modo Ronda', tagline:'Una partida. Varios juegos. Un solo ganador.', letters:['M','R'], colors:[YEL,MINT], min:2, max:12, isNew:true};
+function gameMeta(id){ return id==='ronda' ? RONDA_META : GAMES.find(g=>g.id===id); }
+// Central registry of which games Modo Ronda can chain together, and the
+// one call each needs to be dropped into a slot: its own start-a-fresh-
+// game entry point (same one its "COMENZAR" button already calls) and its
+// own cumulative-totals getter (same one its own ranking screen already
+// uses). Adding a 5th game later to Modo Ronda is just one more entry
+// here — nothing else in this file needs to change.
+const RONDA_ADAPTERS = {
+  unanimo: { startGame:'uStartGame', totals:'totals', defaultConfig:()=>({rounds:1, words:6, time:45}) },
+  dibujalo: { startGame:'dStartGame', totals:'dTotals', defaultConfig:()=>({rounds:1, chooseTime:10, drawTime:60, hints:true, categories:Object.keys(DIBUJALO_BANK)}) },
+  tuttifrutti: { startGame:'tfStartGame', totals:'tfTotals', defaultConfig:()=>({rounds:1, time:60, categories:['nombre','animal','pais','comida','objeto','pelicula'], hard:false}) },
+  impostor: { startGame:'impStartGame', totals:'impTotals', defaultConfig:()=>({rounds:1, impostorCount:'auto', clueTime:30, discussTime:60, voteTime:20, mode:'classic'}) },
+};
 // Same formulas each config screen uses for its own live estimate, applied
 // to the default settings — shown on the picker card before anyone's
 // customized anything for this room.
@@ -141,6 +160,7 @@ function gameEstimateMinutes(gameId){
   if(gameId==='dibujalo') return Math.max(1,Math.round(6*(60+10+15)/60));
   if(gameId==='tuttifrutti') return Math.max(1,Math.round(5*(60+40)/60));
   if(gameId==='impostor') return Math.max(1,Math.round(5*(6*30+60+20+30)/60));
+  if(gameId==='ronda') return 12;
   return 5;
 }
 
@@ -187,6 +207,8 @@ class Game {
     this.dDraft = { rounds:6, chooseTime:10, drawTime:60, hints:true, categories:Object.keys(DIBUJALO_BANK) };
     this.tfDraft = { rounds:5, time:60, categories:['nombre','animal','pais','comida','objeto','pelicula'], hard:false };
     this.impDraft = { rounds:5, impostorCount:'auto', clueTime:30, discussTime:60, voteTime:20, mode:'classic' };
+    const allGameIds = Object.keys(RONDA_ADAPTERS);
+    this.rondaDraft = { selectedGames:[...allGameIds], orderMode:'custom', customOrder:[...allGameIds], noRepeat:true, rounds:4 };
     this.state = null; // host-authoritative shared state, once in a room
     this.toasts = [];
     this.chatMessages = [];
@@ -386,7 +408,7 @@ class Game {
     this.state = {
       code, hostId:this.myId, maxPlayers:12,
       players:[{id:this.myId, name, avatar:{...this.local.avatar}, joinedAt:Date.now()}],
-      gameId:null, gameConfig:null, g:null,
+      gameId:null, gameConfig:null, g:null, match:null,
       phase:'lobby', stage:0, rev:0, updatedAt:Date.now()
     };
     this.local.appliedStage = 0;
@@ -740,6 +762,7 @@ class Game {
   uNext(){
     if(!this.isHost) return;
     if(this.state.g.round+1 < this.state.gameConfig.rounds){ this.hostStartRound(this.state.g.round+1); }
+    else if(this.state.match){ this.rondaGameFinished(); }
     else { this.state.phase='final'; this.state.stage=(this.state.stage||0)+1; this.broadcastState(); }
   }
   uPlayAgain(){
@@ -757,6 +780,7 @@ class Game {
     this.state.gameId = null;
     this.state.gameConfig = null;
     this.state.g = null;
+    this.state.match = null;
     this.state.phase = 'lobby';
     this.state.stage = (this.state.stage||0) + 1;
     this.local.hostFlow = null;
@@ -982,6 +1006,7 @@ class Game {
   tfNext(){
     if(!this.isHost) return;
     if(this.state.g.round+1 < this.state.gameConfig.rounds){ this.tfStartRound(this.state.g.round+1); }
+    else if(this.state.match){ this.rondaGameFinished(); }
     else { this.state.phase='tfFinal'; this.state.stage=(this.state.stage||0)+1; this.broadcastState(); }
   }
   tfPlayAgain(){
@@ -1141,6 +1166,7 @@ class Game {
   dNext(){
     if(!this.isHost) return;
     if(this.state.g.round+1 < this.state.gameConfig.rounds){ this.dStartRound(this.state.g.round+1); }
+    else if(this.state.match){ this.rondaGameFinished(); }
     else { this.state.phase='dFinal'; this.state.stage=(this.state.stage||0)+1; this.broadcastState(); }
   }
   dPlayAgain(){
@@ -1568,7 +1594,8 @@ class Game {
       joinGame: ()=>this.joinGame(),
       confirmJoinName: ()=>this.confirmJoinName(),
       startGame: ()=>{
-        if(this.state.gameId==='unanimo') this.uStartGame();
+        if(this.state.gameId==='ronda') this.rondaStartMatch();
+        else if(this.state.gameId==='unanimo') this.uStartGame();
         else if(this.state.gameId==='dibujalo') this.dStartGame();
         else if(this.state.gameId==='tuttifrutti') this.tfStartGame();
         else if(this.state.gameId==='impostor') this.impStartGame();
@@ -1597,6 +1624,48 @@ class Game {
       impContinueReveal: ()=>this.impContinueReveal(),
       impSendGuess: ()=>this.impSendGuess(),
       impStartResults: ()=>{ if(this.isHost) this.impStartResults(); },
+      // --- Modo Ronda: config screen ---
+      confirmRondaConfig: ()=>this.confirmRondaConfig(),
+      rondaToggleGame: (t)=>{
+        const id = t.dataset.game;
+        const d = this.rondaDraft;
+        const i = d.selectedGames.indexOf(id);
+        if(i>=0){
+          if(d.selectedGames.length<=2){ this.toast('Elegí al menos 2 juegos', CORAL); return; }
+          d.selectedGames.splice(i,1);
+          const oi = d.customOrder.indexOf(id); if(oi>=0) d.customOrder.splice(oi,1);
+        } else {
+          d.selectedGames.push(id);
+          d.customOrder.push(id);
+        }
+        if(d.noRepeat) d.rounds = Math.min(d.rounds, d.selectedGames.length);
+        this.renderScreen();
+      },
+      rondaSetOrderMode: (t)=>{ this.rondaDraft.orderMode = t.dataset.val; this.renderScreen(); },
+      // Tap-to-build ordering: tapping a game in the "disponibles" pool
+      // appends it to the order; tapping it again in the order list removes
+      // it — no drag-and-drop needed for a handful of items.
+      rondaOrderAdd: (t)=>{
+        const id = t.dataset.game;
+        if(!this.rondaDraft.customOrder.includes(id)) this.rondaDraft.customOrder.push(id);
+        this.renderScreen();
+      },
+      rondaOrderRemove: (t)=>{
+        const id = t.dataset.game;
+        this.rondaDraft.customOrder = this.rondaDraft.customOrder.filter(g=>g!==id);
+        this.renderScreen();
+      },
+      rondaToggleNoRepeat: ()=>{
+        const d = this.rondaDraft;
+        d.noRepeat = !d.noRepeat;
+        if(d.noRepeat) d.rounds = Math.min(d.rounds, d.selectedGames.length);
+        this.renderScreen();
+      },
+      rondaSetRounds: (t)=>{ this.rondaDraft.rounds = Number(t.dataset.val); this.renderScreen(); },
+      // --- Modo Ronda: match flow ---
+      rondaBeginSlot: ()=>this.rondaBeginSlot(),
+      rondaNext: ()=>this.rondaNext(),
+      rondaPlayAgain: ()=>this.rondaPlayAgain(),
       decWords: ()=>{ this.uDraft.words = clamp(this.uDraft.words-1,3,8); this.renderScreen(); },
       incWords: ()=>{ this.uDraft.words = clamp(this.uDraft.words+1,3,8); this.renderScreen(); },
       setRounds: (t)=>{ this.uDraft.rounds = Number(t.dataset.val); this.renderScreen(); },
@@ -1710,6 +1779,9 @@ class Game {
     else if(sc==='impResults') html = this.viewImpResults();
     else if(sc==='impRanking') html = this.viewImpRanking();
     else if(sc==='impFinal') html = this.viewImpFinal();
+    else if(sc==='rondaIntro') html = this.viewRondaIntro();
+    else if(sc==='rondaResults') html = this.viewRondaResults();
+    else if(sc==='rondaFinal') html = this.viewRondaFinal();
     else html = this.viewHome();
 
     this.root.innerHTML = html;
@@ -1857,8 +1929,10 @@ class Game {
         <div class="heading" style="font-size:clamp(20px,5.5vw,26px);text-align:center;animation:rise .5s .4s both">Party games para jugar con amigos.</div>
       </div>
       <div style="position:relative;z-index:1;display:flex;flex-direction:column;gap:12px;padding-top:30px">
-        <div style="display:flex;flex-wrap:wrap;justify-content:center;gap:14px">${gameCards}</div>
+        <div style="text-align:center;font-size:13px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)">Juego individual</div>
+        <div style="display:flex;flex-wrap:wrap;justify-content:center;gap:14px;margin-top:10px">${gameCards}</div>
       </div>
+      <div style="position:relative;z-index:1;padding-top:20px">${this.rondaCardHtml('pickGameFromHome','0.5s')}</div>
       <div style="position:relative;z-index:1;width:100%;max-width:460px;margin:0 auto;display:flex;flex-direction:column;gap:14px;padding-top:22px;padding-bottom:24px">
         <div style="display:flex;flex-direction:column;gap:8px;padding:14px;border-radius:20px;background:#fff;border:2px solid var(--line)">
           <div style="font-size:14px;font-weight:700;color:var(--muted);padding-left:4px">¿Te pasaron un código?</div>
@@ -1902,6 +1976,7 @@ class Game {
       if(this.local.hostFlow==='dibujalo') return this.viewDibujaloConfig ? this.viewDibujaloConfig() : this.viewComingSoonConfig('dibujalo');
       if(this.local.hostFlow==='tuttifrutti') return this.viewTfConfig ? this.viewTfConfig() : this.viewComingSoonConfig('tuttifrutti');
       if(this.local.hostFlow==='impostor') return this.viewImpostorConfig ? this.viewImpostorConfig() : this.viewComingSoonConfig('impostor');
+      if(this.local.hostFlow==='ronda') return this.viewRondaConfig();
     }
     const hostId = s.hostId;
     const n = Math.max(6, pl.length);
@@ -1930,6 +2005,33 @@ class Game {
           <div class="heading" style="font-size:20px">${esc(this.playerById(hostId)?.name||'El anfitrión')} está eligiendo el juego…</div>
           <div style="font-size:14px;font-weight:600;color:var(--muted)">Ya te avisamos apenas arranque.</div>
         </div>`;
+    } else if(s.gameId==='ronda'){
+      const plan = s.match ? s.match.plan : [];
+      const effMin = Math.max(2, ...(s.gameConfig.selectedGames||[]).map(id=>gameMeta(id).min));
+      const minOk = pl.length >= effMin;
+      const canStart = this.isHost && minOk;
+      const rows = plan.map((gid,i)=>{
+        const gm = gameMeta(gid);
+        return `<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-top:${i===0?'0':'2px solid var(--panel-line)'}">
+          <div style="width:26px;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:16px;color:var(--muted)">${i+1}</div>
+          <div style="width:34px;height:40px;border-radius:10px;background:${gm.colors[0]};border:2px solid ${INK};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:15px">${gm.letters[0]}</div>
+          <div style="font-weight:800;font-size:15px">${esc(gm.name)}</div>
+        </div>`;
+      }).join('');
+      const bottom = this.isHost
+        ? (canStart ? `<button class="btn-primary" data-action="startGame">INICIAR PARTIDA</button>`
+          : `<div style="text-align:center;font-size:14px;font-weight:700;color:var(--muted)">Se necesitan al menos ${effMin} jugadores para esta selección</div><button class="btn-primary" disabled>INICIAR PARTIDA</button>`)
+        : `<div style="height:62px;border-radius:18px;border:2px solid ${INK};background:#fff;display:flex;align-items:center;justify-content:center;gap:10px;font-weight:800;font-size:17px">${esc(this.playerById(hostId)?.name||'El anfitrión')} va a comenzar<span style="display:flex;gap:3px"><span style="animation:blink 1.2s infinite">•</span><span style="animation:blink 1.2s .2s infinite">•</span><span style="animation:blink 1.2s .4s infinite">•</span></span></div>`;
+      lowerSection = `
+        <div style="display:flex;align-items:center;gap:10px;padding:14px 16px;border-radius:20px;background:${YEL};border:2px solid ${INK}">
+          <div class="heading" style="display:flex;align-items:center;gap:8px;font-size:19px">${this.iconStar(20)} MODO RONDA</div>
+          ${this.isHost?`<button data-action="pickGame" data-game="ronda" aria-label="Cambiar configuración" style="flex:0 0 auto;height:38px;padding:0 14px;border-radius:12px;border:2px solid ${INK};background:#fff;font-weight:800;font-size:13px;margin-left:auto">Editar</button>`:''}
+        </div>
+        <div class="card" style="padding:4px 16px">
+          <div style="padding-top:10px;font-size:12px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)">Rondas</div>
+          ${rows}
+        </div>
+        <div class="sticky-bottom">${bottom}</div>`;
     } else {
       const meta = gameMeta(s.gameId);
       const chips = this.gameConfigChips(s.gameId, s.gameConfig);
@@ -2010,6 +2112,22 @@ class Game {
     return `<div style="display:flex;flex-direction:column;gap:10px">
       <div style="font-size:13px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);padding:0 4px">¿A qué jugamos?</div>
       <div style="display:flex;flex-wrap:wrap;justify-content:center;gap:14px">${cards}</div>
+      <div style="padding-top:6px">${this.rondaCardHtml('pickGame','0.3s')}</div>
+    </div>`;
+  }
+  // Distinct/starred card for Modo Ronda — deliberately different from the
+  // plain white single-game cards (dark, full-width) since it's meant to
+  // stand out as "the special option", not just a 5th game in the grid.
+  rondaCardHtml(actionName, delay){
+    return `<div style="animation:rise .5s both;animation-delay:${delay||'0s'};width:100%;max-width:560px;margin:0 auto">
+      <button class="press-card" data-action="${actionName}" data-game="ronda" style="position:relative;display:flex;align-items:center;gap:16px;padding:20px 22px;border-radius:24px;background:${INK};border:2.5px solid ${INK};text-align:left;width:100%">
+        <div style="position:absolute;top:14px;right:16px;padding:5px 12px;border-radius:999px;background:${MINT};border:2px solid ${INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:11px;letter-spacing:.06em;color:${INK}">NUEVO</div>
+        <div style="flex:0 0 auto;width:56px;height:56px;border-radius:16px;background:${YEL};border:2.5px solid var(--cream);display:flex;align-items:center;justify-content:center">${this.iconStar(28, INK)}</div>
+        <div style="display:flex;flex-direction:column;gap:2px;min-width:0">
+          <div class="heading" style="font-size:22px;color:var(--cream)">Modo Ronda</div>
+          <div style="font-size:14px;font-weight:600;color:var(--cream);opacity:.85">Una partida. Varios juegos. Un solo ganador.</div>
+        </div>
+      </button>
     </div>`;
   }
   viewComingSoonConfig(gameId){
@@ -2985,6 +3103,10 @@ class Game {
     }
   }
   iconMask(px, color){ return this._icon(px||18, color||INK, 2.1, `<path d="M2 9c3-3 6-3 9-1 3-2 6-2 9 1-1 6-4 8-7 6-1-1-3-1-4 0-3 2-6 0-7-6z"></path><circle cx="7.5" cy="9.3" r="1.3" fill="${color||INK}"></circle><circle cx="16.5" cy="9.3" r="1.3" fill="${color||INK}"></circle>`); }
+  iconStar(px, color){ return this._icon(px||18, color||INK, 2.1, `<path d="M12 3l2.6 5.6 6 .7-4.4 4.1 1.2 6-5.4-3-5.4 3 1.2-6-4.4-4.1 6-.7z"></path>`); }
+  iconShuffle(px, color){ return this._icon(px||16, color||INK, 2.1, `<path d="M4 6h3.5l9 12H20M4 18h3.5l3-4M13.5 6H20"></path><path d="M17.5 3l3 3-3 3M17.5 15l3 3-3 3"></path>`); }
+  iconListOrdered(px, color){ return this._icon(px||16, color||INK, 2.1, `<path d="M9 6h11M9 12h11M9 18h11"></path><path d="M4 5h1v3M4 8h2M4.5 13c1-1 2-1 2 .3 0 .8-1 1-1 1.7h2M4 20h2l-2 2h2"></path>`); }
+  iconTrophy(px, color){ return this._icon(px||18, color||INK, 2.1, `<path d="M8 4h8v5a4 4 0 0 1-8 0V4z"></path><path d="M8 5H5a3 3 0 0 0 3 4M16 5h3a3 3 0 0 1-3 4"></path><path d="M12 13v3M9 20h6M9.5 16.5h5l.5 3.5h-6z"></path>`); }
 
   /* ================= IMPOSTOR =================
      Security model: the actual secret (who's the impostor, both words)
@@ -3340,6 +3462,7 @@ class Game {
   impNext(){
     if(!this.isHost) return;
     if(this.state.g.round+1 < this.state.gameConfig.rounds){ this.impStartRound(this.state.g.round+1); }
+    else if(this.state.match){ this.rondaGameFinished(); }
     else { this.state.phase='impFinal'; this.state.stage=(this.state.stage||0)+1; this.broadcastState(); }
   }
   impPlayAgain(){
@@ -3811,6 +3934,319 @@ class Game {
             <div style="width:100%;background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:8px 18px">${finalRows}</div>
           </div>
           <div class="final-stats">${statsHtml}</div>
+        </div>
+        <div class="sticky-bottom">
+          <div style="max-width:560px;margin:0 auto;padding:0 14px;display:flex;flex-direction:row;align-items:center;gap:12px">${bottom}</div>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  /* ================= MODO RONDA =================
+     A coordination layer, not a game: it never touches how Unánimo,
+     Dibujalo, Tutti Frutti or Impostor actually play. It just drives
+     this.state.gameId/gameConfig/g through the exact same shape and the
+     exact same XStartGame() entry point each game's own "COMENZAR" button
+     already calls — so from any single game's point of view, Modo Ronda
+     starting it looks identical to a host picking it from the portal.
+     The one unavoidable seam is the "no more of my own rounds" branch in
+     each game's XNext() (see uNext/dNext/tfNext/impNext above), which
+     hands off to rondaGameFinished() instead of that game's own XFinal
+     when a match is active — one line each, nothing about how any game
+     scores or plays changes. Persistent match state (plan, running
+     scores) lives in this.state.match, a sibling of gameId/gameConfig/g,
+     so it survives untouched across every constituent game's own state
+     changes. */
+  confirmRondaConfig(){
+    if(!this.isHost) return;
+    const d = this.rondaDraft;
+    if(d.selectedGames.length < 2){ this.toast('Elegí al menos 2 juegos', CORAL); return; }
+    let sequence;
+    if(d.orderMode==='random'){
+      sequence = d.selectedGames.slice();
+      for(let i=sequence.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [sequence[i],sequence[j]]=[sequence[j],sequence[i]]; }
+    } else {
+      sequence = d.customOrder.filter(id=>d.selectedGames.includes(id));
+      d.selectedGames.forEach(id=>{ if(!sequence.includes(id)) sequence.push(id); });
+    }
+    if(!sequence.length) return;
+    const rounds = d.noRepeat ? Math.min(d.rounds, sequence.length) : d.rounds;
+    const plan = [];
+    for(let i=0;i<rounds;i++) plan.push(sequence[i % sequence.length]);
+    this.state.gameId = 'ronda';
+    this.state.gameConfig = { rounds, orderMode:d.orderMode, noRepeat:d.noRepeat, selectedGames:[...d.selectedGames] };
+    this.state.g = null;
+    const scores = {}; this.players().forEach(p=>{ scores[p.id]=0; });
+    this.state.match = { mode:'ronda', totalRounds:rounds, currentIndex:-1, plan, scores, roundScores:[], doneGameIds:[] };
+    this.state.stage = (this.state.stage||0) + 1;
+    this.local.hostFlow = null;
+    this.broadcastState();
+  }
+  rondaStartMatch(){
+    if(!this.isHost || this.state.gameId!=='ronda' || !this.state.match) return;
+    this.rondaShowIntro(0);
+  }
+  rondaShowIntro(index){
+    if(!this.isHost || !this.state.match) return;
+    this.state.match.currentIndex = index;
+    this.state.g = null;
+    this.state.phase = 'rondaIntro';
+    this.state.stage = (this.state.stage||0) + 1;
+    this.broadcastState();
+  }
+  // Host-only, host-clicked ("COMENZAR" on the intro screen): builds this
+  // slot's gameId/gameConfig exactly like that game's own confirmXConfig()
+  // would, then calls its real XStartGame() — same entry point its "COMENZAR
+  // <JUEGO>" button uses from the ordinary single-game lobby.
+  rondaBeginSlot(){
+    if(!this.isHost || !this.state.match || this.state.phase!=='rondaIntro') return;
+    const m = this.state.match;
+    const gameId = m.plan[m.currentIndex];
+    const adapter = RONDA_ADAPTERS[gameId];
+    if(!adapter) return;
+    this.state.gameId = gameId;
+    this.state.gameConfig = adapter.defaultConfig();
+    this.state.g = {};
+    this[adapter.startGame]();
+  }
+  // Called from uNext/dNext/tfNext/impNext instead of that game's own
+  // XFinal — pulls its cumulative totals (the exact same numbers its own
+  // final/ranking screen would show), adds them to the match's running
+  // score, and shows Modo Ronda's own "ronda completada" screen.
+  rondaGameFinished(){
+    if(!this.isHost || !this.state.match) return;
+    const m = this.state.match;
+    const adapter = RONDA_ADAPTERS[this.state.gameId];
+    if(!adapter) return;
+    const finalTotals = this[adapter.totals](this.state.gameConfig.rounds-1);
+    const delta = {};
+    this.players().forEach(p=>{
+      delta[p.id] = finalTotals[p.id]||0;
+      m.scores[p.id] = (m.scores[p.id]||0) + delta[p.id];
+    });
+    m.roundScores[m.currentIndex] = delta;
+    m.doneGameIds.push(this.state.gameId);
+    this.state.phase = 'rondaResults';
+    this.state.stage = (this.state.stage||0) + 1;
+    this.broadcastState();
+  }
+  rondaNext(){
+    if(!this.isHost || !this.state.match || this.state.phase!=='rondaResults') return;
+    const m = this.state.match;
+    if(m.currentIndex+1 >= m.totalRounds){
+      this.state.phase = 'rondaFinal';
+      this.state.stage = (this.state.stage||0) + 1;
+      this.broadcastState();
+    } else {
+      this.rondaShowIntro(m.currentIndex+1);
+    }
+  }
+  rondaPlayAgain(){
+    if(!this.isHost || !this.state.match) return;
+    const m = this.state.match;
+    this.players().forEach(p=>{ m.scores[p.id]=0; });
+    m.currentIndex = -1;
+    m.roundScores = [];
+    m.doneGameIds = [];
+    this.state.gameId = 'ronda';
+    this.state.g = null;
+    this.state.phase = 'lobby';
+    this.state.stage = (this.state.stage||0) + 1;
+    this.broadcastState();
+  }
+
+  /* ================= MODO RONDA — screens ================= */
+  viewRondaConfig(){
+    const d = this.rondaDraft;
+    const roundMax = d.noRepeat ? d.selectedGames.length : 8;
+    const roundOpts = Array.from({length:Math.max(1,roundMax-1)},(_,i)=>i+2).map(n=>`<button data-action="rondaSetRounds" data-val="${n}" style="height:48px;border-radius:14px;border:2px solid ${INK};background:${d.rounds===n?INK:'#fff'};color:${d.rounds===n?'var(--cream)':INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:16px">${n}</button>`).join('');
+    const gameChips = GAMES.map(g=>{
+      const on = d.selectedGames.includes(g.id);
+      return `<button data-action="rondaToggleGame" data-game="${g.id}" style="display:flex;align-items:center;gap:8px;padding:10px 14px;border-radius:14px;border:2px solid ${INK};background:${on?MINT:'#fff'}">
+        <div style="width:26px;height:30px;border-radius:8px;background:${g.colors[0]};border:2px solid ${INK};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:12px">${g.letters[0]}</div>
+        <span style="font-weight:800;font-size:14px">${esc(g.name)}</span>
+        ${on?this.iconCheckSmall():''}
+      </button>`;
+    }).join('');
+    const orderModeBtns = ['custom','random'].map(md=>`<button data-action="rondaSetOrderMode" data-val="${md}" style="flex:1;height:48px;border-radius:14px;border:2px solid ${INK};background:${d.orderMode===md?INK:'#fff'};color:${d.orderMode===md?'var(--cream)':INK};display:flex;align-items:center;justify-content:center;gap:8px;font-weight:800;font-size:14px">${md==='custom'?this.iconListOrdered(16,d.orderMode===md?'var(--cream)':INK):this.iconShuffle(16,d.orderMode===md?'var(--cream)':INK)} ${md==='custom'?'Personalizado':'Aleatorio'}</button>`).join('');
+    let orderBuilder = '';
+    if(d.orderMode==='custom'){
+      const orderRows = d.customOrder.filter(id=>d.selectedGames.includes(id)).map((id,i)=>{
+        const gm = gameMeta(id);
+        return `<button data-action="rondaOrderRemove" data-game="${id}" style="display:flex;align-items:center;gap:10px;width:100%;padding:10px 12px;border-radius:14px;border:2px solid ${INK};background:#fff;text-align:left">
+          <div style="width:24px;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:15px;color:var(--muted)">${i+1}</div>
+          <div style="width:28px;height:32px;border-radius:8px;background:${gm.colors[0]};border:2px solid ${INK};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:13px">${gm.letters[0]}</div>
+          <span style="flex:1;font-weight:800;font-size:14px">${esc(gm.name)}</span>
+          ${this.iconClose(14)}
+        </button>`;
+      }).join('');
+      const pool = d.selectedGames.filter(id=>!d.customOrder.includes(id));
+      const poolChips = pool.map(id=>{
+        const gm = gameMeta(id);
+        return `<button data-action="rondaOrderAdd" data-game="${id}" style="display:flex;align-items:center;gap:6px;padding:8px 12px;border-radius:12px;border:2px dashed var(--dashed);background:transparent">
+          <div style="width:22px;height:26px;border-radius:6px;background:${gm.colors[0]};border:2px solid ${INK};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:11px">${gm.letters[0]}</div>
+          <span style="font-weight:700;font-size:13px">${esc(gm.name)}</span>
+        </button>`;
+      }).join('');
+      orderBuilder = `<div style="display:flex;flex-direction:column;gap:8px;padding-top:4px">
+        ${orderRows || `<div style="text-align:center;font-size:13px;font-weight:700;color:var(--muted);padding:10px 0">Tocá los juegos de abajo para armar el orden.</div>`}
+        ${pool.length?`<div style="display:flex;flex-wrap:wrap;gap:8px;padding-top:4px">${poolChips}</div>`:''}
+      </div>`;
+    }
+    const orderedCount = d.customOrder.filter(id=>d.selectedGames.includes(id)).length;
+    const canConfirm = d.selectedGames.length>=2 && (d.orderMode==='random' || orderedCount===d.selectedGames.length);
+    const estimate = '≈ '+(d.rounds*3)+' min de juego';
+    return `<div class="screen screen-narrow" style="padding-top:28px;padding-bottom:28px">
+      <div class="top-bar"><button class="icon-btn" data-action="backToPicker" aria-label="Volver">${this.iconBack()}</button><div class="heading" style="font-size:28px">Modo Ronda</div></div>
+      <div style="flex:1;display:flex;flex-direction:column;justify-content:center;gap:22px;padding:16px 0">
+        <div style="background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:6px 18px;display:flex;flex-direction:column">
+          <div style="display:flex;flex-direction:column;gap:10px;padding:14px 0;border-bottom:2px solid var(--panel-line)">
+            <div style="font-weight:800;font-size:17px">Juegos disponibles</div>
+            <div style="display:flex;flex-wrap:wrap;gap:8px">${gameChips}</div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:10px;padding:14px 0;border-bottom:2px solid var(--panel-line)">
+            <div style="font-weight:800;font-size:17px">Orden</div>
+            <div style="display:flex;gap:8px">${orderModeBtns}</div>
+            ${orderBuilder}
+          </div>
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 0;border-bottom:2px solid var(--panel-line)">
+            <div style="display:flex;flex-direction:column;gap:2px"><div style="font-weight:800;font-size:17px">No repetir juegos</div><div style="font-size:14px;color:var(--muted)">Cada juego aparece como máximo una vez</div></div>
+            <button data-action="rondaToggleNoRepeat" style="width:56px;height:32px;border-radius:999px;border:2px solid ${INK};background:${d.noRepeat?MINT:'#F1E7D8'};position:relative;flex:0 0 auto"><span style="position:absolute;top:2px;left:${d.noRepeat?'26px':'2px'};width:24px;height:24px;border-radius:50%;background:#fff;border:2px solid ${INK};transition:left .15s"></span></button>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:10px;padding:14px 0">
+            <div style="display:flex;align-items:baseline;justify-content:space-between"><div style="font-weight:800;font-size:17px">Rondas</div>${d.noRepeat?`<div style="font-size:12px;font-weight:700;color:var(--muted)">máx. ${d.selectedGames.length} sin repetir</div>`:''}</div>
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px">${roundOpts}</div>
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <div style="text-align:center;font-size:14px;font-weight:700;color:var(--muted)">${estimate}</div>
+          ${!canConfirm && d.orderMode==='custom' ? `<div style="text-align:center;font-size:13px;font-weight:700;color:#B3341A">Terminá de ordenar todos los juegos elegidos</div>` : ''}
+          <button class="btn-primary" data-action="confirmRondaConfig" ${canConfirm?'':'disabled'}>SIGUIENTE</button>
+        </div>
+      </div>
+    </div>`;
+  }
+  viewRondaIntro(){
+    const s = this.state, m = s.match;
+    const gameId = m.plan[m.currentIndex];
+    const gm = gameMeta(gameId);
+    const isFirst = m.currentIndex === 0;
+    const rankedIds = this.rankOf(m.scores);
+    const leaderId = rankedIds[0];
+    const leader = leaderId ? this.playerById(leaderId) : null;
+    const leaderHasPoints = leader && (m.scores[leaderId]||0) > 0;
+    return `<div style="min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;text-align:center;padding:20px">
+      ${!isFirst && leaderHasPoints ? `<div style="display:flex;align-items:center;gap:8px;padding:8px 16px;border-radius:999px;background:#fff;border:2px solid ${INK};font-weight:800;font-size:14px;animation:rise .4s both">${this.iconTrophy(16)} ${esc(leader.name)} lidera con ${m.scores[leaderId]} puntos</div>` : ''}
+      <div style="font-size:15px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)">RONDA ${m.currentIndex+1} DE ${m.totalRounds}</div>
+      <div style="display:flex;gap:10px;animation:pop .5s cubic-bezier(.3,1.6,.5,1) both">
+        <div style="width:64px;height:76px;border-radius:16px;background:${gm.colors[0]};border:2.5px solid ${INK};box-shadow:0 4px 0 ${INK};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:32px;transform:rotate(-4deg)">${gm.letters[0]}</div>
+        <div style="width:64px;height:76px;border-radius:16px;background:${gm.colors[1]};border:2.5px solid ${INK};box-shadow:0 4px 0 ${INK};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:32px;transform:rotate(4deg)">${gm.letters[1]}</div>
+      </div>
+      <div class="heading" style="font-size:clamp(28px,8vw,40px)">${esc(gm.name.toUpperCase())}</div>
+      <div style="font-size:15px;font-weight:600;color:var(--muted);max-width:340px">${esc(gm.tagline)}</div>
+      ${this.isHost ? `<button class="btn-primary" data-action="rondaBeginSlot" style="margin-top:10px">COMENZAR</button>`
+        : `<div style="margin-top:10px;height:54px;padding:0 24px;border-radius:16px;border:2px solid ${INK};background:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;color:var(--muted)">Esperando al anfitrión…</div>`}
+    </div>`;
+  }
+  viewRondaResults(){
+    const s = this.state, m = s.match, pl = this.players(), byId = {}; pl.forEach(p=>byId[p.id]=p);
+    const gameId = m.doneGameIds[m.doneGameIds.length-1];
+    const gm = gameMeta(gameId);
+    const delta = m.roundScores[m.currentIndex] || {};
+    const deltaSorted = pl.slice().sort((a,b)=>(delta[b.id]||0)-(delta[a.id]||0));
+    const deltaRows = deltaSorted.map((p,i)=>`<div style="display:flex;align-items:center;gap:12px;padding:9px 0;border-bottom:2px solid var(--panel-line);animation:rise .4s both;animation-delay:${(i*0.06).toFixed(2)}s">
+      <div style="width:28px;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:18px;color:var(--muted)">${i+1}</div>
+      <div style="width:32px;height:32px;flex:0 0 auto">${avatarSVG(p.avatar,32)}</div>
+      <div style="flex:1;min-width:0;font-weight:800;font-size:15px">${esc(p.name)}${p.id===this.myId?' (vos)':''}</div>
+      <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:18px;color:${(delta[p.id]||0)>0?'#0E8A66':'var(--muted)'}">+${delta[p.id]||0}</div>
+    </div>`).join('');
+    const totalRanked = this.rankOf(m.scores);
+    const totalRows = totalRanked.map((id,i)=>{
+      const p = byId[id];
+      return `<div style="display:flex;align-items:center;gap:12px;padding:9px 0;border-bottom:${i<totalRanked.length-1?'2px solid var(--panel-line)':'0'}">
+        <div style="width:28px;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:18px">${i+1}</div>
+        <div style="width:32px;height:32px;flex:0 0 auto">${avatarSVG(p.avatar,32)}</div>
+        <div style="flex:1;min-width:0;font-weight:800;font-size:15px">${esc(p.name)}${p.id===this.myId?' (vos)':''}</div>
+        <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:18px">${m.scores[id]||0} pts</div>
+      </div>`;
+    }).join('');
+    const isLast = m.currentIndex+1 >= m.totalRounds;
+    const bottom = this.isHost
+      ? `<button class="btn-primary" data-action="rondaNext">${isLast?'VER RESULTADO FINAL':'SIGUIENTE RONDA'}</button>`
+      : `<div style="height:54px;border-radius:16px;border:2px solid ${INK};background:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;color:var(--muted)">Esperando al anfitrión…</div>`;
+    return `<div class="screen">
+      <div style="display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center">
+        <div class="heading" style="font-size:clamp(28px,7vw,38px)">RONDA ${m.currentIndex+1} COMPLETADA</div>
+        <div style="font-size:14px;font-weight:700;color:var(--muted)">${gm?esc(gm.name):''}</div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:20px;max-width:900px;margin:0 auto;width:100%">
+        <div class="card" style="padding:4px 18px">
+          <div style="padding-top:10px;font-size:12px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)">Puntos de esta ronda</div>
+          ${deltaRows}
+        </div>
+        <div class="card" style="padding:4px 18px">
+          <div style="padding-top:10px;font-size:12px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)">Puntaje total</div>
+          ${totalRows}
+        </div>
+      </div>
+      <div class="sticky-bottom">${bottom}</div>
+    </div>`;
+  }
+  viewRondaFinal(){
+    const s = this.state, m = s.match, pl = this.players(), byId = {}; pl.forEach(p=>byId[p.id]=p);
+    const nr = this.rankOf(m.scores);
+    const w = byId[nr[0]];
+    const winnerTitle = w.id===this.myId ? '¡GANASTE, '+w.name.toUpperCase()+'!' : w.name.toUpperCase()+' GANÓ';
+    const pod = [1,0,2].filter(i=>nr[i]);
+    const H=['170px','124px','92px'], PBG=[YEL,'#E4DEF5','#F6BE9E'];
+    const podium = pod.map((i)=>{
+      const p = byId[nr[i]];
+      return `<div style="flex:0 1 130px;min-width:0;display:flex;flex-direction:column;align-items:center;gap:8px;animation:rise .6s both;animation-delay:${(0.2+(2-i)*0.15).toFixed(2)}s">
+        <div style="width:${i===0?72:56}px;height:${i===0?72:56}px;flex:0 0 auto">${avatarSVG(p.avatar, i===0?72:56)}</div>
+        <div style="font-weight:800;font-size:16px;text-align:center">${esc(p.name)}</div>
+        <div style="width:100%;height:${H[i]};border-radius:18px 18px 0 0;background:${PBG[i]};border:2.5px solid ${INK};border-bottom:0;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding-top:10px;gap:2px">
+          <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:40px;line-height:1">${i+1}</div>
+          <div style="font-weight:800;font-size:14px">${m.scores[nr[i]]||0} pts</div>
+        </div>
+      </div>`;
+    }).join('');
+    const finalRows = nr.map((id,i)=>{
+      const label = id===this.myId ? byId[id].name+' (vos)' : byId[id].name;
+      return `<div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:${i<nr.length-1?'2px solid var(--panel-line)':'0'}">
+        <div style="width:28px;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:20px">${i+1}</div>
+        <div style="width:38px;height:38px;flex:0 0 auto">${avatarSVG(byId[id].avatar,38)}</div>
+        <div style="flex:1;min-width:0;font-weight:800;font-size:17px">${esc(label)}</div>
+        <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:20px">${m.scores[id]||0} pts</div>
+      </div>`;
+    }).join('');
+    const playedChips = m.plan.map(gid=>{
+      const gm = gameMeta(gid);
+      return `<div style="display:flex;align-items:center;gap:8px;padding:10px 14px;border-radius:14px;background:#fff;border:2px solid ${INK}">
+        <div style="width:26px;height:30px;border-radius:8px;background:${gm.colors[0]};border:2px solid ${INK};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:12px">${gm.letters[0]}</div>
+        <span style="font-weight:800;font-size:14px">${esc(gm.name)}</span>
+      </div>`;
+    }).join('');
+    const confettiHtml = this.confetti.map(c=>`<div style="position:absolute;top:-20px;left:${c.left};width:${c.w};height:${c.h};border-radius:3px;background:${c.color};border:1.5px solid ${INK};animation:fall ${c.dur} linear ${c.delay} infinite"></div>`).join('');
+    const bottom = this.isHost
+      ? `<button class="btn-primary" style="flex:1;min-width:0;height:auto;min-height:56px;padding:8px 6px;font-size:14px" data-action="rondaPlayAgain">JUGAR OTRA VEZ</button><button class="btn-secondary" style="flex:1;min-width:0;height:auto;min-height:56px;padding:8px 6px;font-size:14px" data-action="backToPortal">VOLVER AL INICIO</button>`
+      : `<div style="height:54px;border-radius:16px;border:2px solid ${INK};background:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;color:var(--muted)">Esperando a ${esc(this.playerById(s.hostId)?.name||'el anfitrión')}…</div>`;
+    return `<div style="position:relative;min-height:100vh;overflow:hidden">
+      <div style="position:fixed;inset:0;pointer-events:none;z-index:1;overflow:hidden">${confettiHtml}</div>
+      <div style="position:relative;z-index:2;max-width:1080px;margin:0 auto;padding:28px 20px 0;display:flex;flex-direction:column;gap:28px">
+        <div style="display:flex;flex-direction:column;align-items:center;gap:8px;text-align:center">
+          <div style="display:flex;align-items:center;gap:8px;padding:8px 16px;border-radius:999px;background:${INK};color:var(--cream);font-size:14px;font-weight:800;letter-spacing:.12em">${this.iconStar(14,'var(--cream)')} MODO RONDA COMPLETADO</div>
+          <div class="heading" style="font-size:clamp(40px,12vw,84px);line-height:.95;letter-spacing:-.03em;animation:pop .7s cubic-bezier(.3,1.6,.5,1) both">${esc(winnerTitle)}</div>
+          <div class="heading" style="font-size:24px">${m.scores[w.id]||0} puntos</div>
+        </div>
+        <div class="final-layout">
+          <div class="final-ranking">
+            <div style="display:flex;align-items:flex-end;justify-content:center;gap:10px">${podium}</div>
+            <div style="width:100%;background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:8px 18px">${finalRows}</div>
+          </div>
+          <div class="final-stats">
+            <div style="font-size:12px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);padding:0 4px">Jugaron</div>
+            ${playedChips}
+          </div>
         </div>
         <div class="sticky-bottom">
           <div style="max-width:560px;margin:0 auto;padding:0 14px;display:flex;flex-direction:row;align-items:center;gap:12px">${bottom}</div>

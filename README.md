@@ -11,6 +11,8 @@ Un portal de minijuegos multijugador para jugar en grupo, cada uno desde su prop
 - **Tutti Frutti** — misma letra para todos, una palabra por categoría. Cualquiera puede gritar STOP y termina la ronda para todos. 10 puntos si tu respuesta es válida y única, 5 si alguien más puso lo mismo, 0 si está vacía o inválida (se puede impugnar).
 - **Impostor** — todos reciben la misma palabra secreta, menos el infiltrado (una palabra relacionada distinta, o ninguna en modo "puro"). Por turnos cada uno da una pista, después se discute y se vota en secreto a quién creen que es. Si lo atrapan, tiene una última chance: adivinar la palabra del grupo para sobrevivir igual.
 
+**Modo Ronda** — en vez de jugar varias rondas del mismo juego, encadena una secuencia de juegos distintos en una sola partida (por ejemplo: Impostor → Unánimo → Dibujalo → Tutti Frutti). Los puntos de cada juego se suman a un puntaje acumulado que persiste entre juegos, y al final se corona un solo ganador de toda la partida. El host elige qué juegos incluir, el orden (a mano o al azar) y si se pueden repetir. No es un quinto juego: es una capa de coordinación que simplemente arranca cada juego existente como si el host lo hubiera elegido a mano desde el lobby — ningún juego individual sabe ni le importa si está corriendo dentro de una partida de Modo Ronda.
+
 Cada jugador arma su propio personaje al entrar a la sala (una sola vez, no por juego): elige nombre y, con flechitas, el color de piel, ojos, boca y un accesorio opcional — todo dibujado en pixel art vía SVG, sin imágenes externas. Hay efectos de sonido (clics, alguien se une — silenciables con el ícono de parlante) y un chat flotante para hablar con el resto durante toda la sesión.
 
 ## Cómo jugar Unánimo
