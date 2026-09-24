@@ -1311,16 +1311,22 @@ class Game {
   }
   dGuessFeedHtml(){
     const s = this.state, r = s.g.round, pl = this.players(), byId={}; pl.forEach(p=>byId[p.id]=p);
-    const list = (s.g.guesses[r]||[]).slice(-12).reverse();
+    const list = (s.g.guesses[r]||[]).slice(-30).reverse();
     const rows = list.map(g=>{
       const p = byId[g.id]; if(!p) return '';
+      // A correct guess must never show the actual word in the feed —
+      // anyone who hasn't guessed yet would just read it off the screen
+      // and copy it, which defeats the whole round.
+      const textHtml = g.correct
+        ? `<span style="display:inline-flex;align-items:center;gap:6px;color:#0E8A66">${this.iconCheckSmall()} Adivinó la palabra</span>`
+        : esc(g.text);
       return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0">
         <div style="width:22px;height:22px;flex:0 0 auto">${avatarSVG(p.avatar,22)}</div>
         <div style="font-size:13px;font-weight:700;color:var(--muted)">${esc(p.name)}:</div>
-        <div style="flex:1;min-width:0;font-size:14px;font-weight:800;overflow-wrap:anywhere">${esc(g.text)}</div>
+        <div style="flex:1;min-width:0;font-size:14px;font-weight:800;overflow-wrap:anywhere">${textHtml}</div>
       </div>`;
     }).join('') || `<div style="text-align:center;color:var(--muted);font-size:13px;font-weight:700;padding:10px 0">Nadie escribió todavía…</div>`;
-    return `<div data-el="dGuessFeed" style="display:flex;flex-direction:column;gap:2px;max-height:220px;overflow-y:auto">${rows}</div>`;
+    return `<div data-el="dGuessFeed" style="display:flex;flex-direction:column;gap:2px">${rows}</div>`;
   }
   dStartLocalTimer(kind){
     clearInterval(this.tick);
@@ -2531,25 +2537,25 @@ class Game {
           </div>`;
     return `<div style="min-height:100vh;display:flex;flex-direction:column">
       <div style="position:sticky;top:0;z-index:10;background:var(--cream)">
-        <div style="max-width:1080px;margin:0 auto;padding:12px 20px;display:flex;align-items:center;gap:12px">
+        <div style="max-width:1500px;margin:0 auto;padding:12px 20px;display:flex;align-items:center;gap:12px">
           <button class="icon-btn" data-action="askLeave" aria-label="Salir">${this.iconClose()}</button>
           <div style="flex:1;min-width:0;display:flex;align-items:center;gap:8px;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:18px">${this.iconPalette(18)}${isMe?'Estás dibujando':esc(drawer?drawer.name:'?')+' está dibujando'}</div>
           <div data-el="dTimerBox" style="display:flex;align-items:center;gap:8px;height:46px;padding:0 14px;border-radius:999px;border:2px solid ${INK};background:#fff;box-shadow:0 3px 0 ${INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:22px">${this.iconClock()}<span data-el="dTimerText">${mmss(cfg.drawTime)}</span></div>
         </div>
       </div>
-      <div style="flex:1;width:100%;max-width:1080px;margin:0 auto;padding:16px 20px 20px;display:flex;flex-wrap:wrap;gap:18px;align-items:flex-start">
-        <div style="flex:1 1 420px;min-width:0;display:flex;flex-direction:column;gap:10px">
+      <div style="flex:1;width:100%;max-width:1500px;margin:0 auto;padding:16px 20px 20px;display:flex;flex-wrap:wrap;gap:22px;align-items:stretch">
+        <div style="flex:2.2 1 620px;min-width:0;display:flex;flex-direction:column;gap:10px">
           ${isMe?`<div style="background:${YEL};border:2px solid ${INK};border-radius:16px;padding:10px 14px;text-align:center"><span style="font-weight:800;font-size:15px">TU PALABRA ES: ${esc((this.local.dChosenWord||'').toUpperCase())}</span><div style="font-size:12px;font-weight:700;color:var(--muted)">No la muestres.</div></div>`:''}
           ${hintChip}
-          <canvas id="dCanvas" width="640" height="440" style="width:100%;height:auto;aspect-ratio:640/440;background:#fff;border:2.5px solid ${INK};border-radius:20px;box-shadow:0 5px 0 ${INK};cursor:${isMe?'crosshair':'default'}"></canvas>
+          <canvas id="dCanvas" width="900" height="620" style="width:100%;height:auto;aspect-ratio:900/620;background:#fff;border:2.5px solid ${INK};border-radius:20px;box-shadow:0 5px 0 ${INK};cursor:${isMe?'crosshair':'default'}"></canvas>
           ${toolbar}
         </div>
-        <div style="flex:1 1 280px;min-width:0;display:flex;flex-direction:column;gap:10px">
+        <div style="flex:1.3 1 380px;min-width:0;display:flex;flex-direction:column;gap:10px">
           <div style="display:flex;align-items:center;justify-content:space-between;padding:0 4px">
             <div class="heading" style="font-size:17px">Adivinanzas</div>
             <div style="font-size:14px;font-weight:800;color:var(--muted)"><span data-el="dCorrectCount">${correctCount} / ${guessersTotal}</span> acertaron</div>
           </div>
-          <div class="card" style="padding:10px 14px">${this.dGuessFeedHtml()}</div>
+          <div class="card" style="padding:10px 14px;flex:1;min-height:260px;max-height:min(60vh,640px);overflow-y:auto">${this.dGuessFeedHtml()}</div>
           ${guessArea}
         </div>
       </div>
