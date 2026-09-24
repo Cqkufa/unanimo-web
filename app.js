@@ -148,7 +148,12 @@ function gameMeta(id){ return id==='ronda' ? RONDA_META : GAMES.find(g=>g.id===i
 // here — nothing else in this file needs to change.
 const RONDA_ADAPTERS = {
   unanimo: { startGame:'uStartGame', totals:'totals', defaultConfig:()=>({rounds:1, words:6, time:45}) },
-  dibujalo: { startGame:'dStartGame', totals:'dTotals', defaultConfig:()=>({rounds:1, chooseTime:10, drawTime:60, hints:true, categories:Object.keys(DIBUJALO_BANK)}) },
+  // Dibujalo's own turn order already rotates the drawer role through every
+  // player (order[round % order.length]) — setting rounds to the player
+  // count just means that rotation completes exactly once before handing
+  // back to Modo Ronda, so everyone draws exactly one turn, not just one
+  // player for the whole slot.
+  dibujalo: { startGame:'dStartGame', totals:'dTotals', defaultConfig:(n)=>({rounds:Math.max(1,n||1), chooseTime:10, drawTime:60, hints:true, categories:Object.keys(DIBUJALO_BANK)}) },
   tuttifrutti: { startGame:'tfStartGame', totals:'tfTotals', defaultConfig:()=>({rounds:1, time:60, categories:['nombre','animal','pais','comida','objeto','pelicula'], hard:false}) },
   impostor: { startGame:'impStartGame', totals:'impTotals', defaultConfig:()=>({rounds:1, impostorCount:'auto', clueTime:30, discussTime:60, voteTime:20, mode:'classic'}) },
 };
@@ -4011,7 +4016,7 @@ class Game {
     const adapter = RONDA_ADAPTERS[gameId];
     if(!adapter) return;
     this.state.gameId = gameId;
-    this.state.gameConfig = adapter.defaultConfig();
+    this.state.gameConfig = adapter.defaultConfig(this.players().length);
     this.state.g = {};
     this[adapter.startGame]();
   }
