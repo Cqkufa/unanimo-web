@@ -1907,12 +1907,8 @@ class Game {
       ['Dale', '#fff', '62px', 'r', '7%', 6, 't'],
       ['¿Jugamos?', YEL, '150px', 'l', '1%', 5, 't'],
       ['JAJAJAJA', MINT, '190px', 'r', '0%', -6, 't'],
-      ['Me toca 🙋', '#fff', '470px', 'l', G, -4, 'g'],
       ['Ni en pedo', VIOLET, '590px', 'r', G, 7, 'g'],
-      ['😂😂😂', '#fff', '720px', 'l', G, 6, 'g'],
-      ['Va la revancha', PINK, '830px', 'r', G, -5, 'g'],
-      ['¡Uno más!', BLUE, '960px', 'l', G, -7, 'g'],
-      ['Ganaste vos 🙄', '#fff', '1060px', 'r', G, 4, 'g'],
+      ['¡Uno más!', BLUE, '820px', 'l', G, -7, 'g'],
     ];
     const bubbles = BUBBLES.map(([t,bg,top,side,off,rot,tier],i)=>`<div class="home-bubble home-bubble-${tier}" style="top:${top};${tier==='g'?(side==='l'?'right':'left'):(side==='l'?'left':'right')}:${off};animation:float ${5+(i%3)}s ease-in-out ${(i*0.35).toFixed(2)}s infinite"><div style="padding:9px 16px;border-radius:${side==='l'?'18px 18px 18px 4px':'18px 18px 4px 18px'};background:${bg};border:2px solid ${INK};box-shadow:0 3px 0 ${INK};font-weight:800;font-size:16px;white-space:nowrap;transform:rotate(${rot}deg)">${t}</div></div>`).join('');
     return `<div class="screen screen-wide home-screen" style="position:relative">
