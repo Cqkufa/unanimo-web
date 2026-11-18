@@ -369,3 +369,42 @@ html,body{overflow-x:clip}
 /* dice button tucked in the top-right corner of the picker */
 .av-preview-center{position:relative}
 .av-preview-center .av-dice{position:absolute;top:0;right:0;height:34px;padding:0 10px;font-size:13px}
+
+/* ================= Zarpado ================= */
+.zp-col{display:flex;flex-direction:column;gap:14px;min-width:0}
+.zp-play{display:grid;grid-template-columns:1fr;gap:18px;align-items:start}
+@media (min-width:900px){ .zp-play{grid-template-columns:minmax(0,1fr) minmax(0,1.25fr);gap:28px} }
+@media (max-width:899px){ .zp-hide-mobile{display:none} }
+.zp-judge-chip{align-self:flex-start;display:flex;align-items:center;gap:8px;padding:5px 14px 5px 6px;border-radius:999px;background:#fff;border:2px solid var(--ink);font-weight:800;font-size:14px}
+.zp-black{position:relative;background:var(--ink);color:var(--cream);border-radius:22px;padding:24px 22px 40px;box-shadow:0 6px 0 rgba(29,27,47,.35);min-height:170px;display:flex;flex-direction:column;justify-content:center}
+.zp-black.sm{padding:16px 16px 30px;min-height:0;border-radius:18px}
+.zp-black-text{font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:clamp(22px,5.2vw,32px);line-height:1.2;text-wrap:pretty}
+.zp-black.sm .zp-black-text{font-size:17px}
+.zp-black-brand{position:absolute;left:22px;bottom:14px;font-size:11px;font-weight:800;letter-spacing:.2em;opacity:.45}
+.zp-blank{display:inline-block;min-width:3.5em;border-bottom:4px solid var(--cream);line-height:1;opacity:.75}
+.zp-fill{color:var(--yellow);background:rgba(255,200,61,.12);border-radius:8px;padding:0 4px;box-decoration-break:clone;-webkit-box-decoration-break:clone}
+.zp-hand{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+@media (min-width:600px){ .zp-hand{grid-template-columns:repeat(3,minmax(0,1fr))} }
+.zp-white{position:relative;min-height:96px;padding:12px 12px 14px;border-radius:16px;background:#fff;border:2px solid var(--ink);box-shadow:0 3px 0 var(--ink);cursor:pointer;transition:transform .12s,box-shadow .12s,background .15s;user-select:none}
+.zp-white-text{font-weight:800;font-size:15px;line-height:1.25}
+.zp-white:active{transform:translateY(2px);box-shadow:0 1px 0 var(--ink)}
+.zp-white.on{background:var(--yellow);transform:translateY(-3px);box-shadow:0 6px 0 var(--ink)}
+.zp-white.swap{border-style:dashed;background:#FFEDE6}
+.zp-order{position:absolute;top:-10px;right:-8px;width:26px;height:26px;border-radius:50%;background:var(--ink);color:var(--cream);font-weight:800;font-size:14px;display:flex;align-items:center;justify-content:center}
+.zp-blank-input{width:100%;border:0;background:transparent;resize:none;font:800 15px 'Figtree',sans-serif;color:var(--ink);outline:none}
+.zp-swap{height:36px;padding:0 12px;border-radius:12px;border:2px solid var(--ink);background:#fff;box-shadow:0 3px 0 var(--ink);font-weight:800;font-size:13px;color:var(--ink);white-space:nowrap}
+.zp-swap.on{background:var(--ink);color:var(--cream)}
+.zp-swap:disabled{opacity:.4;box-shadow:none}
+.zp-judge-col{max-width:680px}
+@media (min-width:900px){ .zp-judge-col{max-width:900px} .zp-judge-col .zp-black{min-height:300px;padding:40px 44px 50px} .zp-judge-col .zp-black-text{font-size:44px} }
+.zp-slide{animation:mmSlideUp .5s cubic-bezier(.25,1.2,.4,1) both}
+.zp-slide .zp-black{min-height:240px}
+.mm-nav .btn-primary{flex:1}
+.zp-result{display:grid;grid-template-columns:1fr;gap:22px;align-items:start}
+@media (min-width:900px){ .zp-result{grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:32px} }
+.zp-winner-card .zp-black{animation:mmGlow 1.6s ease-in-out infinite}
+.zp-other{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border-radius:16px;background:#fff;border:2px solid var(--line)}
+.zp-score{display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:16px;background:#fff;border:2px solid var(--ink);box-shadow:0 3px 0 var(--ink)}
+.zp-score.won{background:#FFF3CC}
+.zp-best{display:grid;grid-template-columns:1fr;gap:14px}
+@media (min-width:700px){ .zp-best{grid-template-columns:repeat(2,minmax(0,1fr))} }

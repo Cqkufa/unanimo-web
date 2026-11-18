@@ -2,6 +2,7 @@ import { supabase } from './supabaseClient.js';
 import { pickWords } from './words.js';
 import { DIBUJALO_BANK, pickDibujaloTrio, dibujaloFunnyLine, TUTTI_CATEGORIES, pickLetter, pickImpostorPair } from './wordbank.js';
 import { installMakeItMeme, mmDefaultConfig } from './makeitmeme.js';
+import { installZarpado, zpDefaultConfig } from './zarpado.js';
 import { AVATAR_TRAITS, FACE_COLORS, avatarSVG, randomAvatar, normalizeAvatar, avatarColor } from './avatars.js';
 
 /* ---------- utils ---------- */
@@ -61,6 +62,7 @@ const GAMES = [
   {id:'dibujalo', name:'Dibujalo', tagline:'Uno dibuja, el resto adivina en tiempo real contrarreloj.', letters:['D','I'], colors:[BLUE,YEL], min:3, max:10, isNew:true},
   {id:'tuttifrutti', name:'Tutti Frutti', tagline:'Una letra, varias categorías y un solo grito: ¡STOP!', letters:['T','F'], colors:[MINT,PINK], min:2, max:8, isNew:true},
   {id:'impostor', name:'Impostor', tagline:'Todos comparten una palabra. Uno miente. Descubrilo antes de que sea tarde.', letters:['I','M'], colors:[VIOLET,PINK], min:4, max:12, isNew:true},
+  {id:'zarpado', name:'Zarpado', tagline:'+18. Uno lee la frase, el resto la completa con la carta más zarpada. Gana el más hdp.', letters:['Z','P'], colors:[PINK,CORAL], min:3, max:10, isNew:true},
   {id:'makeitmeme', name:'Make It Meme', tagline:'Una imagen, mil chistes. Ponele el texto más gracioso y votá el mejor meme.', letters:['M','E'], colors:[YEL,CORAL], min:3, max:12, isNew:true},
 ];
 // Modo Ronda isn't a game itself — it's a meta-mode that chains a sequence
@@ -89,6 +91,7 @@ const RONDA_ADAPTERS = {
   dibujalo: { startGame:'dStartGame', totals:'dTotals', defaultConfig:(n)=>({rounds:Math.max(1,n||1), chooseTime:10, drawTime:60, hints:true, categories:Object.keys(DIBUJALO_BANK)}) },
   tuttifrutti: { startGame:'tfStartGame', totals:'tfTotals', defaultConfig:()=>({rounds:1, time:60, categories:['nombre','animal','pais','comida','objeto','pelicula'], hard:false}) },
   impostor: { startGame:'impStartGame', totals:'impTotals', defaultConfig:()=>({rounds:1, impostorCount:'auto', clueTime:30, discussTime:60, voteTime:20, mode:'classic'}) },
+  zarpado: { startGame:'zpStartGame', totals:'zpTotals', defaultConfig:()=>({...zpDefaultConfig(), target:3}) },
   makeitmeme: { startGame:'mmStartGame', totals:'mmTotals', defaultConfig:()=>({...mmDefaultConfig(), rounds:2}) },
 };
 // Same formulas each config screen uses for its own live estimate, applied
@@ -99,6 +102,7 @@ function gameEstimateMinutes(gameId){
   if(gameId==='dibujalo') return Math.max(1,Math.round(6*(60+10+15)/60));
   if(gameId==='tuttifrutti') return Math.max(1,Math.round(5*(60+40)/60));
   if(gameId==='impostor') return Math.max(1,Math.round(5*(6*30+60+20+30)/60));
+  if(gameId==='zarpado') return 15;
   if(gameId==='makeitmeme') return Math.max(1,Math.round(5*(60+5*7+25)/60));
   if(gameId==='ronda') return 12;
   return 5;
@@ -148,6 +152,7 @@ class Game {
     this.tfDraft = { rounds:5, time:60, categories:['nombre','animal','pais','comida','objeto','pelicula'], hard:false };
     this.impDraft = { rounds:5, impostorCount:'auto', clueTime:30, discussTime:60, voteTime:20, mode:'classic' };
     this.mmDraft = mmDefaultConfig();
+    this.zpDraft = zpDefaultConfig();
     const allGameIds = Object.keys(RONDA_ADAPTERS);
     this.rondaDraft = { selectedGames:[...allGameIds], orderMode:'custom', customOrder:[...allGameIds], noRepeat:true, rounds:4 };
     this.state = null; // host-authoritative shared state, once in a room
@@ -161,7 +166,7 @@ class Game {
 
   /* ---------- lifecycle helpers ---------- */
   later(fn, ms){ const t=setTimeout(fn, ms); this.timers.push(t); return t; }
-  clearTimers(){ this.timers.forEach(clearTimeout); this.timers=[]; clearInterval(this.tick); clearInterval(this.revealTick); clearInterval(this.hostWatch); clearInterval(this.dWatch); clearInterval(this.tfWatch); clearInterval(this.impWatch); clearInterval(this.mmWatch); }
+  clearTimers(){ this.timers.forEach(clearTimeout); this.timers=[]; clearInterval(this.tick); clearInterval(this.revealTick); clearInterval(this.hostWatch); clearInterval(this.dWatch); clearInterval(this.tfWatch); clearInterval(this.impWatch); clearInterval(this.mmWatch); clearInterval(this.zpWatch); }
 
   /* ---------- sound ---------- */
   playClick(){ if(!this.soundOn) return; beep(760, 0.05, 'sine', 0.05); }
@@ -326,6 +331,7 @@ class Game {
     // voting memes are anonymous — each author is told privately which one
     // is theirs (so they can't react to it).
     this.channel.on('broadcast', {event:'mmTpl'}, ({payload})=>{ if(payload.to===this.myId) this.mmReceiveTpl(payload); });
+    this.channel.on('broadcast', {event:'zpHand'}, ({payload})=>{ if(payload.to===this.myId) this.zpReceiveHand(payload); });
     this.channel.on('broadcast', {event:'mmOwn'}, ({payload})=>{ if(payload.to===this.myId) this.mmReceiveOwn(payload); });
     await new Promise(resolve=>{
       this.channel.subscribe(status=>{ if(status==='SUBSCRIBED') resolve(); });
@@ -518,6 +524,10 @@ class Game {
       if(this.state.gameId!=='impostor' || !this.state.g) return;
       this.impSubmitGuess(msg.id, msg.text);
     }
+    else if(typeof msg.type==='string' && msg.type.startsWith('zp')){
+      if(this.state.gameId!=='zarpado' || !this.state.g) return;
+      this.zpOnAction(msg);
+    }
     else if(msg.type === 'mmSubmit' || msg.type === 'mmDraft' || msg.type === 'mmReact' || msg.type === 'mmSync' || msg.type === 'mmReroll'){
       if(this.state.gameId!=='makeitmeme' || !this.state.g) return;
       this.mmOnAction(msg);
@@ -629,6 +639,7 @@ class Game {
         this.local.impGuessDraft = '';
       }
       if(typeof s.phase === 'string' && s.phase.startsWith('mm')) this.mmOnStage(s);
+      if(typeof s.phase === 'string' && s.phase.startsWith('zp')) this.zpOnStage(s);
       this.renderScreen();
       return;
     }
@@ -657,6 +668,7 @@ class Game {
     else if(this.local.screen === 'impVote') this.renderScreen();
     else if(this.local.screen === 'impGuess') this.renderScreen();
     else if(typeof this.local.screen === 'string' && this.local.screen.startsWith('mm')) this.mmOnSameStage();
+    else if(typeof this.local.screen === 'string' && this.local.screen.startsWith('zp')) this.zpOnSameStage();
   }
 
   /* ---------- round flow (host drives global stage) ---------- */
@@ -1489,6 +1501,7 @@ class Game {
       else if(t.dataset.role === 'imp-clue-input'){ this.local.impClueDraft = t.value.slice(0,40); }
       else if(t.dataset.role === 'imp-guess-input'){ this.local.impGuessDraft = t.value.slice(0,40); }
       else if(t.dataset.role === 'mm-top' || t.dataset.role === 'mm-bottom'){ this.mmOnInput(t); }
+      else if(t.dataset.role === 'zp-blank'){ this.zpOnInput(t); }
     });
     document.body.addEventListener('keydown', e=>{
       const t = e.target;
@@ -1570,6 +1583,7 @@ class Game {
         else if(this.state.gameId==='tuttifrutti') this.tfStartGame();
         else if(this.state.gameId==='impostor') this.impStartGame();
         else if(this.state.gameId==='makeitmeme') this.mmStartGame();
+        else if(this.state.gameId==='zarpado') this.zpStartGame();
       },
       copyCode: ()=>{ try{ navigator.clipboard.writeText(this.state.code); }catch(e){} this.toast('Código copiado', MINT); },
       addBot: ()=>this.addBot(),
@@ -1702,6 +1716,7 @@ class Game {
         else if(this.state.gameId==='tuttifrutti') this.tfNext();
         else if(this.state.gameId==='impostor') this.impNext();
         else if(this.state.gameId==='makeitmeme') this.mmNext();
+        else if(this.state.gameId==='zarpado') this.zpNext();
       },
       playAgain: ()=>{
         if(this.state.gameId==='unanimo') this.uPlayAgain();
@@ -1709,6 +1724,7 @@ class Game {
         else if(this.state.gameId==='tuttifrutti') this.tfPlayAgain();
         else if(this.state.gameId==='impostor') this.impPlayAgain();
         else if(this.state.gameId==='makeitmeme') this.mmPlayAgain();
+        else if(this.state.gameId==='zarpado') this.zpPlayAgain();
       },
       avatarPrev: (t)=>{ const k=t.dataset.trait, n=Number(t.dataset.count), av=normalizeAvatar(this.local.avatar); this.local.avatar = { ...av, [k]:(av[k]-1+n)%n }; saveAvatar(this.local.avatar); this.refreshAvatarUI(); },
       avatarNext: (t)=>{ const k=t.dataset.trait, n=Number(t.dataset.count), av=normalizeAvatar(this.local.avatar); this.local.avatar = { ...av, [k]:(av[k]+1)%n }; saveAvatar(this.local.avatar); this.refreshAvatarUI(); },
@@ -1721,6 +1737,7 @@ class Game {
       ...(this.dibujaloActions ? this.dibujaloActions() : {}),
       ...(this.tfActions ? this.tfActions() : {}),
       ...this.mmActions(),
+      ...this.zpActions(),
     };
   }
 
@@ -1764,6 +1781,10 @@ class Game {
     else if(sc==='mmResults') html = this.viewMmResults();
     else if(sc==='mmRanking') html = this.viewMmRanking();
     else if(sc==='mmFinal') html = this.viewMmFinal();
+    else if(sc==='zpPlay') html = this.viewZpPlay();
+    else if(sc==='zpJudge') html = this.viewZpJudge();
+    else if(sc==='zpResult') html = this.viewZpResult();
+    else if(sc==='zpFinal') html = this.viewZpFinal();
     else html = this.viewHome();
 
     this.root.innerHTML = html;
@@ -1806,6 +1827,7 @@ class Game {
       this.impPatchTimer('vote', left);
     }
     if(sc==='mmWrite' || sc==='mmVote') this.mmAfterRender();
+    if(sc==='zpPlay') this.zpTickTimer();
   }
 
   // Modal container is separate from the screen container so opening/closing
@@ -1970,6 +1992,7 @@ class Game {
       if(this.local.hostFlow==='tuttifrutti') return this.viewTfConfig ? this.viewTfConfig() : this.viewComingSoonConfig('tuttifrutti');
       if(this.local.hostFlow==='impostor') return this.viewImpostorConfig ? this.viewImpostorConfig() : this.viewComingSoonConfig('impostor');
       if(this.local.hostFlow==='makeitmeme') return this.viewMmConfig();
+      if(this.local.hostFlow==='zarpado') return this.viewZpConfig();
       if(this.local.hostFlow==='ronda') return this.viewRondaConfig();
     }
     const hostId = s.hostId;
@@ -2070,6 +2093,7 @@ class Game {
     else if(gameId==='dibujalo') items = [cfg.rounds+(cfg.rounds===1?' ronda':' rondas'), cfg.chooseTime+'s para elegir', cfg.drawTime+'s para dibujar'];
     else if(gameId==='tuttifrutti') items = [cfg.rounds+(cfg.rounds===1?' ronda':' rondas'), cfg.categories.length+' categorías', cfg.time+'s por ronda'];
     else if(gameId==='impostor') items = [cfg.rounds+(cfg.rounds===1?' ronda':' rondas'), (cfg.impostorCount==='auto'?'Infiltrados automático':cfg.impostorCount+(cfg.impostorCount===1?' infiltrado':' infiltrados')), cfg.mode==='pure'?'Modo puro':'Modo clásico'];
+    else if(gameId==='zarpado') items = ['A '+cfg.target+' puntos', cfg.playTime+'s por ronda', '+18'];
     else if(gameId==='makeitmeme') items = [cfg.rounds+(cfg.rounds===1?' ronda':' rondas'), cfg.writeTime+'s para crear', cfg.reactTime+'s por meme', ...(cfg.hostScreen?['Pantalla principal']:[])];
     return items.map(t=>`<div style="padding:8px 14px;border-radius:999px;background:#fff;border:2px solid var(--line);font-size:14px;font-weight:700">${esc(t)}</div>`).join('');
   }
@@ -4255,6 +4279,7 @@ class Game {
 
 // Make It Meme lives in its own module (makeitmeme.js) and plugs its
 // methods into Game here, reusing the same shared UI helpers.
+installZarpado(Game, { INK, CORAL, MINT, YEL, PINK, avatarSVG, esc, mmss, beep });
 installMakeItMeme(Game, { INK, CORAL, MINT, YEL, VIOLET, BLUE, PINK, CONF_COLORS, BOT_NAMES, avatarSVG, esc, mmss, beep, gameMeta, gameEstimateMinutes });
 
 const app = document.getElementById('app');
