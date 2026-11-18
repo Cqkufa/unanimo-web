@@ -113,12 +113,16 @@ a:hover{color:var(--coral)}
 .modal-overlay{
   position:fixed;inset:0;z-index:80;background:rgba(29,27,47,.55);
   display:flex;align-items:center;justify-content:center;padding:20px;
+  overflow-y:auto;overscroll-behavior:contain;
 }
+/* Short windows: the modal keeps its natural size and the overlay scrolls,
+   instead of squashing the modal (which clipped its title and buttons). */
 .modal{
-  width:100%;max-width:440px;max-height:calc(100vh - 40px);overflow:auto;
+  width:100%;max-width:440px;flex-shrink:0;margin:auto 0;
   background:var(--cream);border:2.5px solid var(--ink);border-radius:28px;box-shadow:0 8px 0 var(--ink);
   padding:24px;display:flex;flex-direction:column;gap:18px;animation:pop .4s cubic-bezier(.3,1.5,.5,1) both;
 }
+.modal > *{flex-shrink:0}
 
 .spinner{
   width:18px;height:18px;border-radius:50%;border:3px solid rgba(29,27,47,.25);
