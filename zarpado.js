@@ -90,6 +90,7 @@ export function installZarpado(Game, ui){
     zpPlayers(){ return this.players(); },
     zpAmJudge(){ return !!(this.state && this.state.g && this.state.g.judgeId===this.myId); },
     zpHasPlayed(){ const g=this.state.g, L=this.zpL(); return L.sentRound===g.round || !!(g.played && g.played[this.myId]); },
+    zpPlayConfirmed(){ const g=this.state.g; return !!(g.played && g.played[this.myId]); },
     zpScores(){ const sc={}; this.players().forEach(p=>{ sc[p.id] = (this.state.g.scores||{})[p.id]||0; }); return sc; },
     zpTotals(){ return this.zpScores(); },
     zpFreshG(){ return { round:-1, judgeId:null, judgeOrder:[], card:null, pick:1, playEndAt:0, played:{}, players:[], subs:[], showIdx:0, seen:0, winnerSid:null, result:null, scores:{}, usedCards:[], history:[] }; },
@@ -205,7 +206,7 @@ export function installZarpado(Game, ui){
       if(s.phase!=='zpPlay' || g.played[pid]) return false;
       if((S.swaps[pid]||0) >= ZP_SWAPS) return false;
       const hand = S.hands[pid]||[]; const i = hand.findIndex(c=>c.id===cardId);
-      if(i<0) return false;
+      if(i<0){ this.zpSendHand(pid); return false; } // stale/duplicate request: resync that player
       if(!hand[i].blank) S.discard.push(hand[i].src);
       hand[i] = this.zpDraw();
       S.swaps[pid] = (S.swaps[pid]||0)+1;
@@ -291,7 +292,7 @@ export function installZarpado(Game, ui){
     zpReceiveHand(p){
       const L = this.zpL();
       const fresh = L.handRound !== p.round;
-      L.hand = p.hand; L.handRound = p.round; L.swapsLeft = p.swapsLeft; L.swapMode = false;
+      L.hand = p.hand; L.handRound = p.round; L.swapsLeft = p.swapsLeft; L.swapMode = false; L.swapPending = null;
       L.sel = fresh ? [] : L.sel.filter(id=>p.hand.some(c=>c.id===id));
       if(this.local.screen==='zpPlay') this.renderScreen();
     },
@@ -300,10 +301,21 @@ export function installZarpado(Game, ui){
       const L = this.zpL(), pick = this.state.g.pick;
       if(L.swapMode){
         L.swapMode = false;
-        if(L.swapsLeft<=0) return this.renderScreen();
-        L.swapsLeft--; L.sel = L.sel.filter(x=>x!==id);
+        if(L.swapsLeft<=0 || L.swapPending) return this.renderScreen();
+        L.sel = L.sel.filter(x=>x!==id);
         if(this.isHost) this.zpHostSwap(this.myId, id);
-        else this.sendAction('zpSwap', { id:this.myId, round:this.state.g.round, card:id });
+        else {
+          L.swapPending = id;
+          const payload = { id:this.myId, round:this.state.g.round, card:id };
+          this.sendAction('zpSwap', payload);
+          // retry until the new hand arrives (the host ignores a swap of a card you no longer hold)
+          let tries = 0;
+          clearInterval(this._zpSwapRetry);
+          this._zpSwapRetry = setInterval(()=>{
+            if(L.swapPending!==id || ++tries>4 || !this.state || this.state.phase!=='zpPlay'){ clearInterval(this._zpSwapRetry); if(L.swapPending===id){ L.swapPending=null; this.renderScreen(); } return; }
+            this.sendAction('zpSwap', payload);
+          }, 1200);
+        }
         if(this.soundOn) beep(440,.06,'sine',.05);
         return this.renderScreen();
       }
@@ -322,7 +334,18 @@ export function installZarpado(Game, ui){
       L.sentAnswers = L.sel.map(id=>{ const c=L.hand.find(x=>x.id===id); return c.blank ? texts[id] : c.text; });
       L.sentRound = g.round;
       if(this.isHost){ const err = this.zpHostPlay(this.myId, L.sel, texts); if(err){ L.sentRound=-1; this.toast('No se pudo enviar', CORAL); } }
-      else this.sendAction('zpPlay', { id:this.myId, round:g.round, cards:L.sel, texts });
+      else {
+        // Broadcast has no delivery guarantee: keep re-sending until the
+        // host's state says our play was registered (duplicates are ignored).
+        const payload = { id:this.myId, round:g.round, cards:L.sel.slice(), texts };
+        this.sendAction('zpPlay', payload);
+        clearInterval(this._zpRetry);
+        this._zpRetry = setInterval(()=>{
+          const st = this.state;
+          if(!st || st.phase!=='zpPlay' || st.g.round!==payload.round || this.zpPlayConfirmed()){ clearInterval(this._zpRetry); return; }
+          this.sendAction('zpPlay', payload);
+        }, 1200);
+      }
       if(this.soundOn){ beep(660,.08,'triangle',.08); beep(990,.12,'triangle',.08,.08); }
       this.renderScreen();
     },
@@ -338,6 +361,9 @@ export function installZarpado(Game, ui){
         if(!this.isHost && !this.zpAmJudge()) this.later(()=>{ if(this.state && this.state.phase==='zpPlay' && this.zpL().handRound!==this.state.g.round) this.sendAction('zpSync', { id:this.myId, round:this.state.g.round }); }, 1500);
         if(this.zpAmJudge() && this.soundOn) beep(523,.12,'triangle',.08);
       }
+      if(s.phase==='zpJudge' && L.sentRound===g.round && !(g.played||{})[this.myId] && g.judgeId!==this.myId){
+        L.sentRound = -1; this.toast('Tu carta no llegó a tiempo esta ronda', CORAL);
+      }
       if(s.phase==='zpResult'){ if(g.result && g.result.winnerPid && this.soundOn) [523,659,784,1046].forEach((f,i)=>beep(f,.16,'triangle',.09,i*.12)); }
       this.zpBindKeys();
     },
@@ -345,6 +371,8 @@ export function installZarpado(Game, ui){
       if(this.local.screen==='zpPlay'){
         const el = this.root.querySelector('[data-el="zpStatus"]'); if(el) el.innerHTML = this.zpStatusHtml();
         if(this.zpHasPlayed() && this.root.querySelector('[data-action="zpSubmit"]')) this.renderScreen();
+        const box = this.root.querySelector('[data-el="zpSentBox"]');
+        if(box && this.zpPlayConfirmed() && box.textContent.startsWith('Enviando')){ box.style.background = MINT; box.textContent = '¡Carta jugada! Ahora a esperar…'; }
       } else if(this.local.screen==='zpJudge') this.renderScreen();
     },
     zpBindKeys(){
@@ -383,7 +411,7 @@ export function installZarpado(Game, ui){
         zpSetTime: t=>{ this.zpDraft.playTime = Number(t.dataset.val); this.renderScreen(); },
         zpConfirmConfig: ()=>this.zpConfirmConfig(),
         zpToggle: t=>this.zpToggle(t.dataset.card),
-        zpSwapMode: ()=>{ const L=this.zpL(); if(L.swapsLeft<=0) return; L.swapMode = !L.swapMode; this.renderScreen(); },
+        zpSwapMode: ()=>{ const L=this.zpL(); if(L.swapsLeft<=0 || L.swapPending) return; L.swapMode = !L.swapMode; this.renderScreen(); },
         zpSubmit: ()=>this.zpSubmit(),
         zpPrev: ()=>this.zpNav(-1),
         zpNext: ()=>this.zpNav(1),
@@ -434,7 +462,7 @@ export function installZarpado(Game, ui){
       } else if(this.zpHasPlayed()){
         const ans = L.sentRound===g.round && L.sentAnswers ? L.sentAnswers : Array(g.pick).fill(null);
         body = `<div class="zp-col">${judgeChip}${blackCard(fillHtml(g.card, ans))}
-          <div style="background:${MINT};border:2.5px solid ${INK};border-radius:20px;box-shadow:0 4px 0 ${INK};padding:14px 16px;font-weight:800;font-size:17px;text-align:center;animation:pop .4s both">¡Carta jugada! Ahora a esperar…</div>
+          <div data-el="zpSentBox" style="background:${this.zpPlayConfirmed()?MINT:'#fff'};border:2.5px solid ${INK};border-radius:20px;box-shadow:0 4px 0 ${INK};padding:14px 16px;font-weight:800;font-size:17px;text-align:center;animation:pop .4s both">${this.zpPlayConfirmed()?'¡Carta jugada! Ahora a esperar…':'Enviando tu carta…'}</div>
           ${statusCard}</div>`;
       } else if(!L.hand.length || L.handRound!==g.round){
         body = `<div class="zp-col">${judgeChip}${blackCard(fillHtml(g.card, Array(g.pick).fill(null)))}<div style="display:flex;justify-content:center;padding:20px"><div class="spinner"></div></div></div>`;
@@ -457,7 +485,7 @@ export function installZarpado(Game, ui){
           <div class="zp-col">
             <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
               <div style="font-size:12px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)">${L.swapMode?'Tocá la carta que querés cambiar':(g.pick>1?'Elegí 2 cartas, en orden':'Elegí tu carta')}</div>
-              <button class="zp-swap${L.swapMode?' on':''}" data-action="zpSwapMode" ${L.swapsLeft<=0?'disabled':''}>🔄 ${L.swapMode?'Cancelar':`Cambiar · ${L.swapsLeft}`}</button>
+              <button class="zp-swap${L.swapMode?' on':''}" data-action="zpSwapMode" ${(L.swapsLeft<=0||L.swapPending)?'disabled':''}>🔄 ${L.swapPending?'Cambiando…':L.swapMode?'Cancelar':`Cambiar · ${L.swapsLeft}`}</button>
             </div>
             <div class="zp-hand">${cards}</div>
           </div>
