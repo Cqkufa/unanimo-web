@@ -51,6 +51,7 @@ const MM_INTRO_MS = 2600;       // "Ronda N" intro before typing starts
 const MM_WRITE_GRACE_MS = 2500; // wait for late submits after the deadline
 const MM_REACT_GRACE_MS = 700;
 const MM_NEXT_DELAY_MS = 1100;  // pause after everyone reacted, before the next meme
+export const MM_REROLLS = 2;    // times a player can swap their template per round
 
 export function mmDefaultConfig(){
   return { rounds:5, writeTime:60, reactTime:10, categories:Object.keys(MEME_CATEGORIES), hostScreen:false, points:[...MM_POINTS] };
@@ -205,7 +206,7 @@ export function installMakeItMeme(Game, ui){
     },
     mmFreshG(){
       return { round:-1, usedTemplates:[], participants:[], writeStartAt:0, writeEndAt:0,
-        submitted:[], submitMs:[], entries:[], showIndex:0, showEndAt:0, reacted:[], results:[] };
+        submitted:[], submitMs:[], entries:[], showIndex:0, showEndAt:0, reacted:[], results:[], revealStep:0 };
     },
 
     /* ---------- config (host, from the lobby) ---------- */
@@ -279,7 +280,8 @@ export function installMakeItMeme(Game, ui){
     mmSendTpl(pid){
       if(!this.isHost || !this.mmSecret) return;
       const tpl = this.mmSecret.tplOf[pid]; if(!tpl) return;
-      const payload = { round:this.mmSecret.round, tpl };
+      const left = MM_REROLLS - ((this.mmSecret.rerolls||{})[pid]||0);
+      const payload = { round:this.mmSecret.round, tpl, left };
       if(pid===this.myId) this.mmReceiveTpl(payload);
       else if(!this.playerById(pid)?.isBot) this.send('mmTpl', { to:pid, ...payload });
     },
@@ -402,9 +404,37 @@ export function installMakeItMeme(Game, ui){
       const judges = {}; entries.forEach(e=>{ judges[e.mid] = (g.participants[r]||[]).filter(id=>id!==e.pid && (this.playerById(id) || (this.mmReacts[e.mid]||{})[id])); });
       const rows = mmScoreRound(entries, this.mmReacts, judges, s.gameConfig.points);
       g.results[r] = { entries:rows, reactions:JSON.parse(JSON.stringify(this.mmReacts||{})) };
+      g.revealStep = rows.length ? 0 : 1; // host moves through the reveal with the arrows
       s.phase = 'mmResults';
       s.stage = (s.stage||0) + 1;
       this.broadcastState();
+    },
+    // Host-only: move the shared reveal forward/back (0 = intro, 1..n = memes
+    // from last place to the winner, n+1 = round summary).
+    mmRevealMove(delta){
+      if(!this.isHost || this.state.phase!=='mmResults') return;
+      const g = this.state.g, res = g.results[g.round]; const n = res ? res.entries.length : 0;
+      const next = Math.max(0, Math.min(n+1, (g.revealStep||0) + delta));
+      if(next===g.revealStep) return;
+      g.revealStep = next;
+      this.broadcastState();
+    },
+    // Host-only validation of a template swap.
+    mmHostReroll(pid){
+      if(!this.isHost) return false;
+      const s = this.state, g = s.g, r = g.round, sec = this.mmSecret;
+      if(s.phase!=='mmWrite' || !sec || sec.round!==r) return false;
+      if(!(g.participants[r]||[]).includes(pid) || g.submitted[r][pid]) return false;
+      sec.rerolls = sec.rerolls || {};
+      if((sec.rerolls[pid]||0) >= MM_REROLLS) return false;
+      const taken = [...g.usedTemplates, ...Object.values(sec.tplOf)];
+      const id = pickMemeTemplate(taken, s.gameConfig.categories);
+      if(!id || id===sec.tplOf[pid]) return false;
+      sec.tplOf[pid] = id;
+      g.usedTemplates = [...g.usedTemplates, id];
+      sec.rerolls[pid] = (sec.rerolls[pid]||0) + 1;
+      this.mmSendTpl(pid);
+      return true;
     },
     mmTotals(uptoRound){
       return mmTotalsFrom(this.state.g.results, this.players().map(p=>p.id), uptoRound);
@@ -436,6 +466,7 @@ export function installMakeItMeme(Game, ui){
         this.mmDrafts[msg.id] = { top:mmCleanCaption(msg.top), bottom:mmCleanCaption(msg.bottom) };
       }
       else if(msg.type==='mmReact') this.mmHostReact(msg.id, msg.mid, msg.rx);
+      else if(msg.type==='mmReroll') this.mmHostReroll(msg.id);
       // reconnected player asks again for their private info
       else if(msg.type==='mmSync'){ if(this.state.phase==='mmWrite') this.mmSendTpl(msg.id); else this.mmSendOwn(msg.id); }
     },
@@ -443,7 +474,7 @@ export function installMakeItMeme(Game, ui){
     /* ---------- every client: local actions ---------- */
     mmReceiveTpl(payload){
       const L = this.mmL();
-      L.tpl = payload.tpl; L.tplRound = payload.round;
+      L.tpl = payload.tpl; L.tplRound = payload.round; L.tplLeft = payload.left==null ? MM_REROLLS : payload.left; L.rerolling = false;
       const tpl = memeTemplate(payload.tpl);
       if(tpl){ const im = new Image(); im.src = tpl.poster || tpl.src; }
       if(this.local.screen==='mmWrite' && this.state && this.state.g.round===payload.round) this.renderScreen();
@@ -483,6 +514,18 @@ export function installMakeItMeme(Game, ui){
       else this.sendAction('mmSubmit', { id:this.myId, round:this.state.g.round, top, bottom });
       if(!auto) this.toast('¡Meme enviado!', MINT);
       this.renderScreen();
+    },
+    mmReroll(){
+      if(!this.state || this.state.phase!=='mmWrite' || !this.mmAmParticipant() || this.mmHasSent()) return;
+      const L = this.mmL();
+      if(L.rerolling || !this.mmMyTpl() || (L.tplLeft==null?MM_REROLLS:L.tplLeft) <= 0) return;
+      L.rerolling = true;
+      const btn = this.root.querySelector('[data-action="mmReroll"]'); if(btn) btn.disabled = true;
+      if(this.isHost){ if(!this.mmHostReroll(this.myId)){ L.rerolling = false; this.renderScreen(); } }
+      else {
+        this.sendAction('mmReroll', { id:this.myId, round:this.state.g.round });
+        this.later(()=>{ if(L.rerolling){ L.rerolling = false; this.renderScreen(); } }, 4000);
+      }
     },
     mmReact(rx){
       if(!this.state || this.state.phase!=='mmVote' || !this.mmAmParticipant()) return;
@@ -529,15 +572,8 @@ export function installMakeItMeme(Game, ui){
         }
       }
       else if(s.phase==='mmResults'){
-        const res = g.results[g.round];
-        const n = res ? res.entries.length : 0;
-        if(L.revealRound!==g.round){
-          L.revealRound = g.round; L.revealStep = 0;
-          // one slide every ~2.4 s (the winner gets a longer drum roll), then the summary
-          const at = i => 1400 + (i-1)*2400 + (i===n ? 600 : 0);
-          for(let i=1;i<=n;i++) this.later(()=>{ if(this.local.screen!=='mmResults' || L.revealStep>=i) return; L.revealStep = i; this.renderScreen(); if(i===n && this.soundOn) beep(660,.12,'triangle',.08); }, at(i));
-          this.later(()=>{ if(this.local.screen!=='mmResults' || L.revealStep>n) return; L.revealStep = n+1; this.renderScreen(); this.mmCelebrate(); }, at(n) + 3200);
-        }
+        L.seenStep = g.revealStep;
+        this.mmBindKeys();
       }
       else if(s.phase==='mmRanking'){
         this.local.rankPhase = 0;
@@ -570,6 +606,27 @@ export function installMakeItMeme(Game, ui){
         else this.mmPatchStatus();
       }
       else if(this.local.screen==='mmVote') this.mmPatchReactUI(false);
+      else if(this.local.screen==='mmResults'){
+        const L = this.mmL(), g = this.state.g, res = g.results[g.round], n = res ? res.entries.length : 0;
+        if(L.seenStep!==g.revealStep){
+          L.seenStep = g.revealStep;
+          this.renderScreen();
+          if(g.revealStep===n && this.soundOn) beep(660,.12,'triangle',.08);
+          if(g.revealStep===n+1) this.mmCelebrate();
+          else if(this.soundOn && g.revealStep>0) beep(520,.06,'sine',.05);
+        }
+      }
+    },
+    // Arrow keys move the reveal (host only, results screen only). Bound once.
+    mmBindKeys(){
+      if(this._mmKeysBound) return;
+      this._mmKeysBound = true;
+      document.addEventListener('keydown', e=>{
+        if(!this.isHost || !this.state || this.local.screen!=='mmResults') return;
+        if(e.target && /INPUT|TEXTAREA/.test(e.target.tagName)) return;
+        if(e.key==='ArrowRight'){ e.preventDefault(); this.mmRevealMove(1); }
+        else if(e.key==='ArrowLeft'){ e.preventDefault(); this.mmRevealMove(-1); }
+      });
     },
     mmAfterRender(){
       const sc = this.local.screen;
@@ -664,7 +721,10 @@ export function installMakeItMeme(Game, ui){
         mmConfirmConfig: ()=>this.mmConfirmConfig(),
         mmSubmitNow: ()=>this.mmSubmit(false),
         mmReact: (t)=>this.mmReact(t.dataset.rx),
-        mmRevealAll: ()=>{ const L=this.mmL(), res=this.state.g.results[this.state.g.round]; const n = res?res.entries.length:0; if(L.revealStep<=n){ L.revealStep = n+1; this.renderScreen(); this.mmCelebrate(); } },
+        mmRevealNext: ()=>this.mmRevealMove(1),
+        mmRevealPrev: ()=>this.mmRevealMove(-1),
+        mmRevealAll: ()=>{ const g=this.state.g, res=g.results[g.round]; const n = res?res.entries.length:0; this.mmRevealMove(n+1-(g.revealStep||0)); },
+        mmReroll: ()=>this.mmReroll(),
       };
     },
 
@@ -785,7 +845,10 @@ export function installMakeItMeme(Game, ui){
           <div class="mm-stage">
             <div style="display:flex;flex-direction:column;gap:10px;animation:popSoft .35s both">
               ${preview}
-              ${!sent ? `<div style="text-align:center;font-size:13px;font-weight:700;color:var(--muted)">${tplId?'Tu plantilla · vista previa en vivo':'Cargando tu plantilla…'}</div>` : ''}
+              ${!sent ? (()=>{ const left = L.tplLeft==null ? MM_REROLLS : L.tplLeft; return `<div class="mm-tpl-bar">
+                <span>${tplId?'Tu plantilla · vista previa en vivo':'Cargando tu plantilla…'}</span>
+                <button class="mm-reroll" data-action="mmReroll" ${(!tplId||left<=0||L.rerolling)?'disabled':''}>🔄 ${left>0?`Cambiar plantilla · ${left===1?'queda 1':'quedan '+left}`:'Sin cambios'}</button>
+              </div>`; })() : ''}
             </div>
             ${side}
           </div>
@@ -837,7 +900,7 @@ export function installMakeItMeme(Game, ui){
       const res = g.results[r] || { entries:[], reactions:{} };
       const rows = res.entries; // sorted by score desc
       const n = rows.length;
-      const step = L.revealRound===r ? L.revealStep : n+1;
+      const step = g.revealStep==null ? n+1 : g.revealStep;
       const done = step > n;
       const isLast = r+1 >= cfg.rounds;
       const winners = rows.filter(e=>e.place===1);
@@ -863,6 +926,15 @@ export function installMakeItMeme(Game, ui){
         : `<div class="mm-place" style="background:${e.place===2?'#E4DEF5':e.place===3?'#F6BE9E':'#fff'}">${e.place?e.place+'º PUESTO':'SIN PUESTO'}</div>`;
       const hostBtn = (label, action, secondary)=>`<button class="${secondary?'btn-secondary':'btn-primary'}" data-action="${action}">${label}</button>`;
 
+      const nextLabel = step===0 ? 'EMPEZAR' : step < n-1 ? 'SIGUIENTE MEME' : step===n-1 ? 'VER AL GANADOR 👑' : 'VER RESUMEN';
+      const revealNav = this.isHost
+        ? `<div class="mm-nav">
+            <button class="btn-secondary mm-nav-prev" data-action="mmRevealPrev" aria-label="Meme anterior" ${step<=0?'disabled':''}>←</button>
+            <button class="btn-primary mm-nav-next" data-action="mmRevealNext">${nextLabel} →</button>
+          </div>
+          <div class="mm-nav-hint">Podés usar las flechas ← → del teclado</div>`
+        : waitHost(s, this, 'va pasando los memes');
+
       // ---------- reveal: one slide at a time ----------
       if(n && !done){
         const e = step>0 ? rows[n-step] : null;
@@ -884,7 +956,7 @@ export function installMakeItMeme(Game, ui){
                   <div style="font-size:15px;font-weight:700;color:var(--muted)">Del último puesto al ganador…</div>
                 </div>`}
           </div>
-          ${this.isHost ? `<div class="sticky-bottom" style="margin:0;padding:16px 20px 20px"><div style="width:100%;max-width:520px;margin:0 auto">${hostBtn('MOSTRAR TODO','mmRevealAll',true)}</div></div>` : ''}
+          <div class="sticky-bottom" style="margin:0;padding:16px 20px 20px"><div style="width:100%;max-width:560px;margin:0 auto">${revealNav}</div></div>
         </div>`;
       }
 
@@ -892,7 +964,7 @@ export function installMakeItMeme(Game, ui){
       let title, sub;
       if(!n){ title = 'NADIE MANDÓ MEME'; sub = 'Esta ronda no suma puntos. ¡Más rápido la próxima!'; }
       else if(!winners.length){ title = 'NADIE SE RIÓ'; sub = 'Ningún meme sumó puntos esta ronda.'; }
-      else { const wn = winners.map(e=>who(e).name); title = winners.length>1 ? '¡EMPATE!' : esc(wn[0]).toUpperCase()+' GANA LA RONDA'; sub = winners.length>1 ? esc(wn.join(' y '))+' comparten el primer puesto' : `${winners[0].counts.lol} ${winners[0].counts.lol===1?'reacción':'reacciones'} 😂`; }
+      else { const wn = winners.map(e=>who(e).name); title = winners.length>1 ? '¡EMPATE!' : esc(wn[0]).toUpperCase()+' GANA LA RONDA'; sub = winners.length>1 ? esc(wn.length>1 ? wn.slice(0,-1).join(', ')+' y '+wn[wn.length-1] : wn[0])+' comparten el primer puesto' : `${winners[0].counts.lol} ${winners[0].counts.lol===1?'reacción':'reacciones'} 😂`; }
       const personal = (isPlayer && n) ? (mine
           ? `<div style="display:flex;align-items:center;justify-content:center;gap:10px;flex-wrap:wrap;padding:12px 16px;border-radius:18px;background:${mine.place===1?YEL:'#fff'};border:2px solid ${INK};box-shadow:0 3px 0 ${INK};font-weight:800;font-size:15px;animation:rise .4s both">${mine.place===1?'¡Ganaste la ronda!':'Tu meme'} · ${rxChips(mine.counts)} · ${placeTxt(mine)} · +${mine.points} pts</div>`
           : `<div style="text-align:center;padding:12px 16px;border-radius:18px;background:#fff;border:2px solid var(--line);font-weight:800;font-size:14px;color:var(--muted)">Esta ronda no enviaste meme</div>`) : '';
@@ -918,7 +990,9 @@ export function installMakeItMeme(Game, ui){
         </div>`;
       }).join('');
       const confettiHtml = winners.length ? `<div style="position:fixed;inset:0;pointer-events:none;z-index:1;overflow:hidden">${this.confetti.slice(0,28).map(c=>`<div style="position:absolute;top:-20px;left:${c.left};width:${c.w};height:${c.h};border-radius:3px;background:${c.color};border:1.5px solid ${INK};animation:fall ${c.dur} linear ${c.delay} 2 both"></div>`).join('')}</div>` : '';
-      const bottom = this.isHost ? hostBtn('VER CLASIFICACIÓN','goRanking') : waitHost(s, this);
+      const bottom = this.isHost
+        ? `<div class="mm-nav">${n?`<button class="btn-secondary mm-nav-prev" data-action="mmRevealPrev" aria-label="Volver a los memes">←</button>`:''}${hostBtn('VER CLASIFICACIÓN','goRanking')}</div>`
+        : waitHost(s, this);
       return `<div style="position:relative;min-height:100vh">
         ${confettiHtml}
         <div class="screen mm-results-col" style="position:relative;z-index:2">

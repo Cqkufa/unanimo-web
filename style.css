@@ -311,3 +311,16 @@ a:hover{color:var(--coral)}
 .mm-winner > div:last-child{width:100%;max-width:560px;align-self:center}
 .mm-fit-hero{max-width:min(100%, calc(40vh * var(--r)))}
 @media (min-width:900px){ .mm-fit-hero{max-width:min(100%, calc(42vh * var(--r)))} }
+
+/* Make It Meme: reveal navigation + template swap */
+.mm-nav{display:flex;gap:10px;align-items:stretch}
+.mm-nav-prev{flex:0 0 auto;width:62px;height:62px;padding:0;font-size:24px}
+.mm-nav-prev:disabled{opacity:.35;cursor:default}
+.mm-nav-next,.mm-nav .btn-primary{flex:1;min-width:0;font-size:20px;white-space:nowrap}
+.mm-nav-hint{text-align:center;font-size:12px;font-weight:700;color:var(--muted)}
+@media (hover:none){ .mm-nav-hint{display:none} }
+.mm-tpl-bar{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;font-size:13px;font-weight:700;color:var(--muted)}
+.mm-reroll{height:38px;padding:0 14px;border-radius:12px;border:2px solid var(--ink);background:#fff;box-shadow:0 3px 0 var(--ink);font-weight:800;font-size:13px;color:var(--ink);white-space:nowrap;transition:transform .1s,box-shadow .1s}
+.mm-reroll:not(:disabled):active{transform:translateY(2px);box-shadow:0 1px 0 var(--ink)}
+.mm-reroll:disabled{opacity:.45;box-shadow:none;cursor:default}
+.mm-nav-hint{margin-top:8px}

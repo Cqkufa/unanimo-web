@@ -587,7 +587,7 @@ class Game {
       if(this.state.gameId!=='impostor' || !this.state.g) return;
       this.impSubmitGuess(msg.id, msg.text);
     }
-    else if(msg.type === 'mmSubmit' || msg.type === 'mmDraft' || msg.type === 'mmReact' || msg.type === 'mmSync'){
+    else if(msg.type === 'mmSubmit' || msg.type === 'mmDraft' || msg.type === 'mmReact' || msg.type === 'mmSync' || msg.type === 'mmReroll'){
       if(this.state.gameId!=='makeitmeme' || !this.state.g) return;
       this.mmOnAction(msg);
     }
