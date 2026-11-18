@@ -251,3 +251,63 @@ a:hover{color:var(--coral)}
 /* lobby players: 2 columns on phones, 3 on wider screens (tags never cut) */
 .player-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
 @media (min-width:600px){ .player-grid{grid-template-columns:repeat(3,minmax(0,1fr))} }
+
+/* Make It Meme on large screens: use the space — wider column, memes sized
+   by the screen height instead of a fixed narrow box. Phones unchanged. */
+.mm-wide{max-width:1080px}
+@media (min-width:1400px){ .mm-wide{max-width:1320px} }
+.mm-fit-write{max-width:min(100%, calc(46vh * var(--r)))}
+.mm-fit-vote{max-width:min(100%, calc(50vh * var(--r)))}
+.mm-fit-tv{max-width:min(100%, calc(62vh * var(--r)))}
+.mm-vote-col{max-width:560px}
+.mm-tv-col{max-width:900px}
+@media (min-width:900px){
+  .mm-fit-write{max-width:min(100%, calc(72vh * var(--r)))}
+  .mm-fit-vote{max-width:min(100%, calc(58vh * var(--r)))}
+  .mm-fit-tv{max-width:min(100%, calc(70vh * var(--r)))}
+  .mm-vote-col{max-width:820px}
+  .mm-tv-col{max-width:1200px}
+  .mm-stage{grid-template-columns:minmax(0,1.7fr) minmax(320px,1fr);gap:28px}
+}
+@media (min-width:1400px){
+  .mm-results{grid-template-columns:repeat(auto-fill,minmax(280px,1fr))}
+  .mm-stage{gap:36px}
+}
+
+/* Make It Meme results: vertical slides, then winner + even ranking list */
+.mm-slide-col{max-width:560px}
+.mm-slide{display:flex;flex-direction:column;gap:12px;animation:mmSlideUp .6s cubic-bezier(.25,1.2,.4,1) both}
+@keyframes mmSlideUp{from{transform:translateY(70px);opacity:0}to{transform:none;opacity:1}}
+.mm-place{align-self:center;padding:8px 16px;border-radius:999px;border:2.5px solid var(--ink);box-shadow:0 3px 0 var(--ink);font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:16px;letter-spacing:.06em;animation:pop .45s cubic-bezier(.3,1.6,.5,1) .15s both}
+.mm-fit-slide{max-width:min(100%, calc(50vh * var(--r)))}
+.mm-fit-hero{max-width:min(100%, calc(44vh * var(--r)))}
+.mm-results-col{max-width:620px}
+.mm-results-layout{display:flex;flex-direction:column;gap:22px}
+.mm-row{display:flex;align-items:center;gap:12px;min-height:84px;padding:10px 12px;border-radius:18px;border:2px solid var(--ink);box-shadow:0 3px 0 var(--ink)}
+.mm-row-pos{flex:0 0 auto;width:26px;text-align:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:22px}
+.mm-row-thumb{flex:0 0 auto;width:60px;height:60px;border-radius:12px;overflow:hidden;border:2px solid var(--ink);background:#15131F}
+.mm-row-thumb img{display:block;width:100%;height:100%;object-fit:cover}
+@media (min-width:900px){
+  .mm-slide-col{max-width:820px}
+  .mm-fit-slide{max-width:min(100%, calc(58vh * var(--r)))}
+  .mm-results-col{max-width:1180px}
+  .mm-results-layout{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:32px;align-items:start}
+  .mm-fit-hero{max-width:min(100%, calc(62vh * var(--r)))}
+}
+
+/* Make It Meme final: rankings left, stats right, winning memes full width */
+.mm-final-grid{display:grid;grid-template-columns:1fr;gap:28px;align-items:start}
+.mm-final-rank,.mm-final-side{display:flex;flex-direction:column;gap:12px;min-width:0}
+.mm-stats{display:grid;grid-template-columns:1fr;gap:12px}
+.mm-stat{border:2px solid var(--ink);border-radius:20px;box-shadow:0 4px 0 var(--ink);padding:16px;display:flex;flex-direction:column;gap:6px;min-height:112px;animation:rise .5s both}
+.mm-hall{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+@media (min-width:700px){ .mm-stats{grid-template-columns:repeat(2,minmax(0,1fr))} .mm-hall{grid-template-columns:repeat(3,minmax(0,1fr))} }
+@media (min-width:1000px){
+  .mm-final-grid{grid-template-columns:minmax(0,5fr) minmax(0,6fr);gap:40px}
+  .mm-hall{grid-template-columns:repeat(auto-fill,minmax(200px,1fr))}
+}
+
+.mm-slide > .mm-place + .mm-meme + div{width:100%;max-width:560px;align-self:center}
+.mm-winner > div:last-child{width:100%;max-width:560px;align-self:center}
+.mm-fit-hero{max-width:min(100%, calc(40vh * var(--r)))}
+@media (min-width:900px){ .mm-fit-hero{max-width:min(100%, calc(42vh * var(--r)))} }

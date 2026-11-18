@@ -158,8 +158,9 @@ export function installMakeItMeme(Game, ui){
   const memeHtml = (templateId, top, bottom, opts={})=>{
     const tpl = memeTemplate(templateId);
     if(!tpl) return `<div class="mm-meme" style="aspect-ratio:1/1;display:flex;align-items:center;justify-content:center"><div class="spinner" style="border-color:rgba(255,255,255,.3);border-top-color:#fff"></div></div>`;
-    const maxH = opts.maxVh ? `max-width:min(100%, calc(${opts.maxVh}vh * ${(tpl.w/tpl.h).toFixed(4)}));margin:0 auto;` : '';
-    return `<div class="mm-meme" style="aspect-ratio:${tpl.w}/${tpl.h};${maxH}${opts.style||''}">
+    // fit: size the meme by the viewport height (bigger on large screens, see .mm-fit-* in style.css)
+    const maxH = opts.fit ? `--r:${(tpl.w/tpl.h).toFixed(4)};margin:0 auto;` : opts.maxVh ? `max-width:min(100%, calc(${opts.maxVh}vh * ${(tpl.w/tpl.h).toFixed(4)}));margin:0 auto;` : '';
+    return `<div class="mm-meme${opts.fit?' mm-fit-'+opts.fit:''}" style="aspect-ratio:${opts.square?'1/1':tpl.w+'/'+tpl.h};${maxH}${opts.style||''}">
       ${tpl.video
         ? `<video src="${tpl.src}" poster="${tpl.poster}" width="${tpl.w}" height="${tpl.h}" autoplay muted loop playsinline disablepictureinpicture preload="auto"></video>`
         : `<img src="${tpl.src}" alt="" width="${tpl.w}" height="${tpl.h}" draggable="false" decoding="async">`}
@@ -177,7 +178,7 @@ export function installMakeItMeme(Game, ui){
     </div>`;
   const header = (s, total, extra)=>`
     <div style="position:sticky;top:0;z-index:10;background:var(--cream)">
-      <div class="mm-header" style="max-width:1080px;margin:0 auto;display:flex;align-items:center;gap:12px">
+      <div class="mm-header mm-wide" style="margin:0 auto;display:flex;align-items:center;gap:12px">
         <button class="icon-btn" data-action="askLeave" aria-label="Salir"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="${INK}" stroke-width="2.6" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
         <div style="flex:1;min-width:0;display:flex;align-items:baseline;gap:6px;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;white-space:nowrap"><span style="font-size:20px">RONDA ${s.g.round+1}</span><span style="font-size:14px;color:var(--muted)">de ${s.gameConfig.rounds}</span>${extra||''}</div>
         ${total!=null?timerBar(total):''}
@@ -532,7 +533,10 @@ export function installMakeItMeme(Game, ui){
         const n = res ? res.entries.length : 0;
         if(L.revealRound!==g.round){
           L.revealRound = g.round; L.revealStep = 0;
-          for(let i=1;i<=n;i++) this.later(()=>{ if(this.local.screen!=='mmResults') return; L.revealStep = i; this.renderScreen(); if(i===n) this.mmCelebrate(); }, 700 + i*(i===n?1300:900));
+          // one slide every ~2.4 s (the winner gets a longer drum roll), then the summary
+          const at = i => 1400 + (i-1)*2400 + (i===n ? 600 : 0);
+          for(let i=1;i<=n;i++) this.later(()=>{ if(this.local.screen!=='mmResults' || L.revealStep>=i) return; L.revealStep = i; this.renderScreen(); if(i===n && this.soundOn) beep(660,.12,'triangle',.08); }, at(i));
+          this.later(()=>{ if(this.local.screen!=='mmResults' || L.revealStep>n) return; L.revealStep = n+1; this.renderScreen(); this.mmCelebrate(); }, at(n) + 3200);
         }
       }
       else if(s.phase==='mmRanking'){
@@ -660,7 +664,7 @@ export function installMakeItMeme(Game, ui){
         mmConfirmConfig: ()=>this.mmConfirmConfig(),
         mmSubmitNow: ()=>this.mmSubmit(false),
         mmReact: (t)=>this.mmReact(t.dataset.rx),
-        mmRevealAll: ()=>{ const L=this.mmL(), res=this.state.g.results[this.state.g.round]; const n = res?res.entries.length:0; if(L.revealStep<n){ L.revealStep = n; this.renderScreen(); this.mmCelebrate(); } },
+        mmRevealAll: ()=>{ const L=this.mmL(), res=this.state.g.results[this.state.g.round]; const n = res?res.entries.length:0; if(L.revealStep<=n){ L.revealStep = n+1; this.renderScreen(); this.mmCelebrate(); } },
       };
     },
 
@@ -774,10 +778,10 @@ export function installMakeItMeme(Game, ui){
             <button class="btn-primary" data-el="mmSendBtn" data-action="mmSubmitNow" ${can?'':'disabled'}>ENVIAR MEME</button>
           </div>${statusCard}</div>`;
       }
-      const preview = sent ? memeHtml(tplId, L.top, L.bottom, { maxVh:46 }) : memeHtml(tplId, L.top, L.bottom, { live:true, maxVh:46 });
+      const preview = sent ? memeHtml(tplId, L.top, L.bottom, { fit:'write' }) : memeHtml(tplId, L.top, L.bottom, { live:true, fit:'write' });
       return `<div style="min-height:100vh;display:flex;flex-direction:column">
         ${header(s, cfg.writeTime)}
-        <div style="flex:1;width:100%;max-width:1080px;margin:0 auto;padding:18px 20px 28px">
+        <div class="mm-wide" style="flex:1;width:100%;margin:0 auto;padding:18px 20px 28px">
           <div class="mm-stage">
             <div style="display:flex;flex-direction:column;gap:10px;animation:popSoft .35s both">
               ${preview}
@@ -808,79 +812,130 @@ export function installMakeItMeme(Game, ui){
       } else {
         controls = `<div style="display:flex;flex-direction:column;gap:10px">
           <div data-el="mmReactHint" style="text-align:center;font-size:14px;font-weight:800;color:var(--muted)">¿Qué te pareció?</div>
-          <div class="mm-react-row">${MM_REACTIONS.map(x=>`<button class="mm-react" data-action="mmReact" data-rx="${x.id}" aria-label="${esc(x.label)}"><span class="mm-react-emoji">${x.emoji}</span><span class="mm-react-label">${esc(x.label)}</span></button>`).join('')}</div>
+          <div class="mm-react-row" style="width:100%;max-width:560px;margin:0 auto">${MM_REACTIONS.map(x=>`<button class="mm-react" data-action="mmReact" data-rx="${x.id}" aria-label="${esc(x.label)}"><span class="mm-react-emoji">${x.emoji}</span><span class="mm-react-label">${esc(x.label)}</span></button>`).join('')}</div>
         </div>`;
       }
       return `<div style="min-height:100vh;display:flex;flex-direction:column">
         ${header(s, cfg.reactTime)}
-        <div style="flex:1;width:100%;max-width:${isPlayer?'560px':'900px'};margin:0 auto;padding:16px 20px 24px;display:flex;flex-direction:column;gap:14px">
+        <div class="${isPlayer?'mm-vote-col':'mm-tv-col'}" style="flex:1;width:100%;margin:0 auto;padding:16px 20px 24px;display:flex;flex-direction:column;gap:14px">
           <div style="display:flex;align-items:center;justify-content:center;gap:10px">
             <span style="font-size:12px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)">Meme ${g.showIndex+1} de ${entries.length}</span>
             <div style="display:flex;gap:5px">${dots}</div>
           </div>
-          <div style="animation:mmSlideIn .5s cubic-bezier(.3,1.4,.5,1) both" data-key="${cur.mid}">${memeHtml(cur.tpl, cur.top, cur.bottom, { maxVh: isPlayer ? 50 : 62 })}</div>
+          <div style="animation:mmSlideIn .5s cubic-bezier(.3,1.4,.5,1) both" data-key="${cur.mid}">${memeHtml(cur.tpl, cur.top, cur.bottom, { fit: isPlayer ? 'vote' : 'tv' })}</div>
           <div data-el="mmReactCount" style="align-self:center;padding:6px 14px;border-radius:999px;background:#fff;border:2px solid var(--line);font-size:14px;font-weight:800">0 / 0 reaccionaron</div>
           ${controls}
         </div>
       </div>`;
     },
 
+    // Results as vertical slides: one meme at a time, big, from last place up
+    // to the winner (each slides in from below). Then the winner stays on
+    // top and the whole round is listed underneath as an even vertical list.
     viewMmResults(){
       const s = this.state, g = s.g, r = g.round, cfg = s.gameConfig, L = this.mmL();
       const res = g.results[r] || { entries:[], reactions:{} };
       const rows = res.entries; // sorted by score desc
       const n = rows.length;
-      const step = L.revealRound===r ? L.revealStep : n;
-      const done = step >= n;
+      const step = L.revealRound===r ? L.revealStep : n+1;
+      const done = step > n;
       const isLast = r+1 >= cfg.rounds;
-      const shownFrom = n - step; // reveal goes from last place up to the winner
       const winners = rows.filter(e=>e.place===1);
       const mine = rows.find(e=>e.pid===this.myId);
       const isPlayer = (g.participants[r]||[]).includes(this.myId);
-      const placeTxt = e=> e.place ? `${e.place}º puesto` : 'Sin puesto';
-      const cardHtml = (e, i)=>{
-        const p = this.playerById(e.pid) || { name:'Jugador desconectado', avatar:null };
-        const revealed = i >= shownFrom;
-        const isWin = e.place===1 && revealed;
-        const justNow = i === shownFrom; // only the card revealed last animates
-        return `<div class="${isWin?'mm-winner':''}" style="position:relative;display:flex;flex-direction:column;gap:10px">
-          ${isWin?`<div class="mm-badge" style="background:${YEL};left:50%;transform:translateX(-50%);top:-14px;font-size:13px;animation:pop .5s cubic-bezier(.3,1.6,.5,1) both">👑 GANADOR${winners.length>1?' (EMPATE)':''}</div>`:''}
-          ${memeHtml(e.tpl, e.top, e.bottom)}
-          <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:18px;border:2px solid ${INK};background:${revealed?(e.pid===this.myId?'#FFEDE6':'#fff'):'var(--panel-line)'};min-height:62px;${revealed&&justNow?'animation:mmFlip .55s cubic-bezier(.3,1.4,.5,1) both':''}">
-            ${revealed ? `
-              <div style="width:34px;height:34px;flex:0 0 auto">${avatarSVG(p.avatar,34)}</div>
-              <div style="flex:1;min-width:0"><div style="display:flex;align-items:baseline;gap:6px;min-width:0"><span style="font-weight:800;font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.name)}${e.pid===this.myId?' (vos)':''}</span><span style="flex:0 0 auto;font-size:12px;font-weight:700;color:var(--muted)">${placeTxt(e)}</span></div><div style="display:flex;gap:10px;align-items:center;margin-top:3px">${rxChips(e.counts)}</div></div>
-              <div style="padding:4px 10px;border-radius:999px;background:${e.points>0?MINT:'#fff'};border:2px solid ${INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:15px">+${e.points}</div>`
-            : `<div style="flex:1;text-align:center;font-weight:800;font-size:14px;color:var(--muted);letter-spacing:.08em">¿DE QUIÉN SERÁ?</div>`}
+      const who = e => this.playerById(e.pid) || { name:'Jugador desconectado', avatar:null };
+      const placeTxt = e => e.place ? `${e.place}º puesto` : 'Sin puesto';
+      const pointsPill = (e, big)=>`<div style="flex:0 0 auto;padding:${big?'6px 14px':'4px 10px'};border-radius:999px;background:${e.points>0?MINT:'#fff'};border:2px solid ${INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:${big?20:15}px">+${e.points}</div>`;
+      const bigRx = counts => MM_REACTIONS.map(x=>`<span style="display:inline-flex;align-items:center;gap:4px;font-weight:800;font-size:17px;opacity:${counts[x.id]?1:.35}"><span style="font-size:22px">${x.emoji}</span>${counts[x.id]}</span>`).join('');
+      const authorBar = (e, big)=>{
+        const p = who(e);
+        return `<div style="display:flex;align-items:center;gap:12px;padding:${big?'14px 16px':'10px 12px'};border-radius:20px;border:2px solid ${INK};background:${e.pid===this.myId?'#FFEDE6':'#fff'};box-shadow:0 4px 0 ${INK}">
+          <div style="width:${big?46:34}px;height:${big?46:34}px;flex:0 0 auto">${avatarSVG(p.avatar, big?46:34)}</div>
+          <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:4px">
+            <div class="one-line" style="font-weight:800;font-size:${big?19:15}px">${esc(p.name)}${e.pid===this.myId?' (vos)':''}</div>
+            <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">${big?bigRx(e.counts):rxChips(e.counts)}</div>
           </div>
+          ${pointsPill(e, big)}
         </div>`;
       };
-      let personal = '';
-      if(done && isPlayer){
-        personal = mine
-          ? `<div style="display:flex;align-items:center;justify-content:center;gap:10px;flex-wrap:wrap;padding:12px 16px;border-radius:18px;background:${mine.place===1?YEL:'#fff'};border:2px solid ${INK};box-shadow:0 3px 0 ${INK};font-weight:800;font-size:15px;animation:rise .4s both">${mine.place===1?'¡Ganaste la ronda!':'Tu meme'} · ${rxChips(mine.counts)} · ${placeTxt(mine)} · +${mine.points} pts</div>`
-          : `<div style="text-align:center;padding:12px 16px;border-radius:18px;background:#fff;border:2px solid var(--line);font-weight:800;font-size:14px;color:var(--muted)">Esta ronda no enviaste meme</div>`;
+      const placeBadge = e => e.place===1
+        ? `<div class="mm-place" style="background:${YEL}">👑 ${winners.length>1?'1º PUESTO (EMPATE)':'GANADOR'}</div>`
+        : `<div class="mm-place" style="background:${e.place===2?'#E4DEF5':e.place===3?'#F6BE9E':'#fff'}">${e.place?e.place+'º PUESTO':'SIN PUESTO'}</div>`;
+      const hostBtn = (label, action, secondary)=>`<button class="${secondary?'btn-secondary':'btn-primary'}" data-action="${action}">${label}</button>`;
+
+      // ---------- reveal: one slide at a time ----------
+      if(n && !done){
+        const e = step>0 ? rows[n-step] : null;
+        const dots = rows.map((_,i)=>{ const shown = i >= n-step; return `<div style="width:${i===n-step?'26px':'10px'};height:10px;border-radius:999px;background:${shown?(i===n-step?CORAL:INK):'#fff'};border:2px solid ${INK}"></div>`; }).reverse().join('');
+        return `<div style="min-height:100vh;display:flex;flex-direction:column">
+          <div class="mm-slide-col" style="flex:1;width:100%;margin:0 auto;padding:22px 20px 24px;display:flex;flex-direction:column;gap:14px">
+            <div style="display:flex;flex-direction:column;align-items:center;gap:8px;text-align:center">
+              <div style="font-size:13px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)">Ronda ${r+1} · Resultados</div>
+              <div style="display:flex;gap:5px">${dots}</div>
+            </div>
+            ${e ? `<div class="mm-slide" data-key="${e.mid}">
+                ${placeBadge(e)}
+                ${memeHtml(e.tpl, e.top, e.bottom, { fit:'slide' })}
+                ${authorBar(e, true)}
+              </div>`
+              : `<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;text-align:center;animation:pop .5s both">
+                  <div style="font-size:56px;line-height:1">🥁</div>
+                  <div class="heading" style="font-size:clamp(28px,6vw,40px)">¿De quién era cada meme?</div>
+                  <div style="font-size:15px;font-weight:700;color:var(--muted)">Del último puesto al ganador…</div>
+                </div>`}
+          </div>
+          ${this.isHost ? `<div class="sticky-bottom" style="margin:0;padding:16px 20px 20px"><div style="width:100%;max-width:520px;margin:0 auto">${hostBtn('MOSTRAR TODO','mmRevealAll',true)}</div></div>` : ''}
+        </div>`;
       }
-      const confettiHtml = done && winners.length ? `<div style="position:fixed;inset:0;pointer-events:none;z-index:1;overflow:hidden">${this.confetti.slice(0,28).map(c=>`<div style="position:absolute;top:-20px;left:${c.left};width:${c.w};height:${c.h};border-radius:3px;background:${c.color};border:1.5px solid ${INK};animation:fall ${c.dur} linear ${c.delay} 2 both"></div>`).join('')}</div>` : '';
+
+      // ---------- done: winner on top + whole round as a vertical list ----------
       let title, sub;
       if(!n){ title = 'NADIE MANDÓ MEME'; sub = 'Esta ronda no suma puntos. ¡Más rápido la próxima!'; }
-      else if(!done){ title = 'RESULTADOS'; sub = 'Revelando autores…'; }
       else if(!winners.length){ title = 'NADIE SE RIÓ'; sub = 'Ningún meme sumó puntos esta ronda.'; }
-      else { const wn = winners.map(e=>this.playerById(e.pid)?.name||'?'); title = winners.length>1 ? '¡EMPATE!' : esc(wn[0]).toUpperCase()+' GANA LA RONDA'; sub = winners.length>1 ? esc(wn.join(' y '))+' comparten el primer puesto' : `${winners[0].counts.lol} ${winners[0].counts.lol===1?'reacción':'reacciones'} 😂`; }
-      const bottom = this.isHost
-        ? (done ? `<button class="btn-primary" data-action="goRanking">VER CLASIFICACIÓN</button>` : `<button class="btn-secondary" data-action="mmRevealAll">MOSTRAR TODO</button>`)
-        : (done ? waitHost(s, this) : '');
+      else { const wn = winners.map(e=>who(e).name); title = winners.length>1 ? '¡EMPATE!' : esc(wn[0]).toUpperCase()+' GANA LA RONDA'; sub = winners.length>1 ? esc(wn.join(' y '))+' comparten el primer puesto' : `${winners[0].counts.lol} ${winners[0].counts.lol===1?'reacción':'reacciones'} 😂`; }
+      const personal = (isPlayer && n) ? (mine
+          ? `<div style="display:flex;align-items:center;justify-content:center;gap:10px;flex-wrap:wrap;padding:12px 16px;border-radius:18px;background:${mine.place===1?YEL:'#fff'};border:2px solid ${INK};box-shadow:0 3px 0 ${INK};font-weight:800;font-size:15px;animation:rise .4s both">${mine.place===1?'¡Ganaste la ronda!':'Tu meme'} · ${rxChips(mine.counts)} · ${placeTxt(mine)} · +${mine.points} pts</div>`
+          : `<div style="text-align:center;padding:12px 16px;border-radius:18px;background:#fff;border:2px solid var(--line);font-weight:800;font-size:14px;color:var(--muted)">Esta ronda no enviaste meme</div>`) : '';
+      const hero = winners.length ? `<div class="mm-winner" style="display:flex;flex-direction:column;gap:12px;animation:rise .5s both">
+          ${placeBadge(winners[0])}
+          ${memeHtml(winners[0].tpl, winners[0].top, winners[0].bottom, { fit:'hero' })}
+          ${winners.length>1 ? '' : authorBar(winners[0], true)}
+        </div>` : '';
+      const list = rows.map((e,i)=>{
+        const tpl = memeTemplate(e.tpl);
+        const thumb = tpl ? (tpl.poster || tpl.src) : '';
+        const p = who(e);
+        const caption = [e.top, e.bottom].filter(Boolean).join(' / ');
+        return `<div class="mm-row" style="animation:rise .4s both;animation-delay:${(0.15+i*0.06).toFixed(2)}s;background:${e.pid===this.myId?'#FFEDE6':'#fff'}">
+          <div class="mm-row-pos">${e.place||'–'}</div>
+          <div class="mm-row-thumb">${thumb?`<img src="${thumb}" alt="" loading="lazy">`:''}</div>
+          <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:3px">
+            <div class="one-line" style="font-weight:800;font-size:15px">${esc(p.name)}${e.pid===this.myId?' (vos)':''}</div>
+            <div class="one-line" style="font-size:13px;font-weight:700;color:var(--muted)">“${esc(caption)}”</div>
+            <div style="display:flex;gap:10px;align-items:center">${rxChips(e.counts)}</div>
+          </div>
+          ${pointsPill(e, false)}
+        </div>`;
+      }).join('');
+      const confettiHtml = winners.length ? `<div style="position:fixed;inset:0;pointer-events:none;z-index:1;overflow:hidden">${this.confetti.slice(0,28).map(c=>`<div style="position:absolute;top:-20px;left:${c.left};width:${c.w};height:${c.h};border-radius:3px;background:${c.color};border:1.5px solid ${INK};animation:fall ${c.dur} linear ${c.delay} 2 both"></div>`).join('')}</div>` : '';
+      const bottom = this.isHost ? hostBtn('VER CLASIFICACIÓN','goRanking') : waitHost(s, this);
       return `<div style="position:relative;min-height:100vh">
         ${confettiHtml}
-        <div class="screen screen-wide" style="position:relative;z-index:2">
+        <div class="screen mm-results-col" style="position:relative;z-index:2">
           <div style="display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center">
-            <div style="font-size:13px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)">RONDA ${r+1}${isLast?' (última)':''}</div>
-            <div class="heading" style="font-size:clamp(28px,7vw,44px);letter-spacing:-.02em;line-height:1.05;${done?'animation:pop .6s cubic-bezier(.3,1.6,.5,1) both':''}">${title}</div>
+            <div style="font-size:13px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)">Ronda ${r+1}${isLast?' (última)':''}</div>
+            <div class="heading" style="font-size:clamp(28px,7vw,44px);letter-spacing:-.02em;line-height:1.05;animation:pop .6s cubic-bezier(.3,1.6,.5,1) both">${title}</div>
             <div style="font-size:15px;font-weight:700;color:var(--muted)">${sub}</div>
           </div>
           ${personal}
-          ${n?`<div class="mm-grid mm-results">${rows.map(cardHtml).join('')}</div>`:''}
-          <div class="sticky-bottom">${bottom}</div>
+          <div class="mm-results-layout">
+            ${n ? `<div style="display:flex;flex-direction:column;gap:10px">
+              <div class="section-label" style="text-align:left">Ranking de la ronda</div>
+              ${list}
+            </div>` : ''}
+            ${hero}
+          </div>
+          <div class="sticky-bottom"><div style="width:100%;max-width:520px;margin:0 auto">${bottom}</div></div>
         </div>
       </div>`;
     },
@@ -962,43 +1017,46 @@ export function installMakeItMeme(Game, ui){
         vomit:     x=>({ label:'Más 🤮 recibidos', value:name(x.pid), sub:plural(x.n,'vómito','vómitos'), bg:VIOLET }),
       };
       const stats = mmFinalStats(g, pl.map(p=>p.id)).map(x=>statDefs[x.key](x));
-      const statsHtml = stats.map((x,i)=>`<div style="background:${x.bg};color:${x.dark?'var(--cream)':INK};border:2px solid ${INK};border-radius:22px;box-shadow:0 4px 0 ${INK};padding:16px;display:flex;flex-direction:column;gap:8px;animation:rise .5s both;animation-delay:${(0.5+i*0.1).toFixed(2)}s">
+      const statsHtml = stats.map((x,i)=>`<div class="mm-stat" style="background:${x.bg};color:${x.dark?'var(--cream)':INK};animation-delay:${(0.4+i*0.08).toFixed(2)}s">
         <div style="font-size:12px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;opacity:${x.dark?0.8:1}">${esc(x.label)}</div>
-        ${x.meme?`<div style="max-width:220px">${memeHtml(x.meme.tpl, x.meme.top, x.meme.bottom)}</div>`:''}
-        <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:24px;line-height:1.05;overflow-wrap:anywhere">${esc(x.value)}</div>
+        <div class="one-line" style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:24px;line-height:1.1">${esc(x.value)}</div>
         <div style="font-size:14px;font-weight:700">${esc(x.sub)}</div>
       </div>`).join('');
       // hall of fame: every round's winning meme
       const hall = (g.results||[]).map((res,r)=>{
         if(!res) return '';
         const win = res.entries.find(e=>e.place===1); if(!win) return '';
-        return `<div style="display:flex;flex-direction:column;gap:6px;animation:rise .5s both;animation-delay:${(0.8+r*0.08).toFixed(2)}s">
-          ${memeHtml(win.tpl, win.top, win.bottom)}
-          <div style="font-size:13px;font-weight:800;text-align:center">Ronda ${r+1} · ${esc(name(win.pid))}</div>
+        return `<div style="display:flex;flex-direction:column;gap:8px;animation:rise .5s both;animation-delay:${(0.6+r*0.08).toFixed(2)}s">
+          ${memeHtml(win.tpl, win.top, win.bottom, { square:true })}
+          <div style="display:flex;justify-content:space-between;gap:8px;font-size:13px;font-weight:800"><span class="one-line">${esc(name(win.pid))}</span><span style="color:var(--muted);flex:0 0 auto">Ronda ${r+1}</span></div>
         </div>`;
       }).join('');
-      const confettiHtml = this.confetti.map(c=>`<div style="position:absolute;top:-20px;left:${c.left};width:${c.w};height:${c.h};border-radius:3px;background:${c.color};border:1.5px solid ${INK};animation:fall ${c.dur} linear ${c.delay} infinite"></div>`).join('');
+      const confettiHtml = this.confetti.map(c=>`<div style="position:absolute;top:-20px;left:${c.left};width:${c.w};height:${c.h};border-radius:3px;background:${c.color};border:1.5px solid ${INK};animation:fall ${c.dur} linear ${c.delay} 2 both"></div>`).join('');
       const bottom = this.isHost
         ? `<button class="btn-primary final-btn" data-action="playAgain">JUGAR DE NUEVO</button><button class="btn-secondary final-btn" data-action="backToPortal">ELEGIR OTRO JUEGO</button>`
         : `<div style="flex:1">${waitHost(s, this, 'elige qué sigue')}</div>`;
       return `<div style="position:relative;min-height:100vh;overflow:hidden">
         <div style="position:fixed;inset:0;pointer-events:none;z-index:1;overflow:hidden">${confettiHtml}</div>
-        <div style="position:relative;z-index:2;max-width:1080px;margin:0 auto;padding:28px 20px 0;display:flex;flex-direction:column;gap:28px">
+        <div class="mm-wide" style="position:relative;z-index:2;margin:0 auto;padding:28px 20px 0;display:flex;flex-direction:column;gap:28px">
           <div style="display:flex;flex-direction:column;align-items:center;gap:8px;text-align:center">
             <div style="padding:8px 16px;border-radius:999px;background:${INK};color:var(--cream);font-size:14px;font-weight:800;letter-spacing:.12em">¡PARTIDA TERMINADA!</div>
             <div class="heading" style="font-size:clamp(40px,12vw,84px);line-height:.95;letter-spacing:-.03em;animation:pop .7s cubic-bezier(.3,1.6,.5,1) both">${esc(winnerTitle)}</div>
             ${w?`<div class="heading" style="font-size:24px">${tot[w.id]} puntos</div>`:''}
           </div>
-          <div class="final-layout">
-            <div class="final-ranking">
-              <div style="display:flex;align-items:flex-end;justify-content:center;gap:10px">${podium}</div>
+          <div class="mm-final-grid">
+            <div class="mm-final-rank">
+              <div class="section-label" style="text-align:left">Posiciones</div>
+              <div style="display:flex;align-items:flex-end;justify-content:center;gap:10px;padding-top:6px">${podium}</div>
               <div style="width:100%;background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:8px 18px">${finalRows}</div>
             </div>
-            <div class="final-stats">${statsHtml}</div>
+            ${statsHtml?`<div class="mm-final-side">
+              <div class="section-label" style="text-align:left">Momentos de la partida</div>
+              <div class="mm-stats">${statsHtml}</div>
+            </div>`:''}
           </div>
           ${hall?`<div style="display:flex;flex-direction:column;gap:12px">
-            <div class="heading" style="font-size:22px;text-align:center">Los memes ganadores</div>
-            <div class="mm-grid mm-hall">${hall}</div>
+            <div class="section-label" style="text-align:left">Los memes ganadores</div>
+            <div class="mm-hall">${hall}</div>
           </div>`:''}
           <div class="sticky-bottom">
             <div class="final-actions">${bottom}</div>
