@@ -365,3 +365,6 @@ a:hover{color:var(--coral)}
 /* avatar picker: centered character, no separators */
 .av-preview-center{flex-direction:column;justify-content:center;gap:12px;padding:0 0 8px}
 .av-row{border-top:0;padding:5px 0}
+/* dice button tucked in the top-right corner of the picker */
+.av-preview-center{position:relative}
+.av-preview-center .av-dice{position:absolute;top:0;right:0;height:34px;padding:0 10px;font-size:13px}
