@@ -243,6 +243,7 @@ class Game {
     if(this.soundOn){ ensureAudio(); if(musicScreen) this.startLobbyMusic(); }
     else this.stopLobbyMusic();
     this.renderHud();
+    this.renderChatPanel();
   }
 
   /* ---------- lobby music: an upbeat, bouncy little loop, synthesized —
@@ -1487,14 +1488,18 @@ class Game {
     let chatFab = '';
     if(this.state){
       const badge = this.local.chatUnread>0 ? `<div style="position:absolute;top:-4px;right:-4px;min-width:20px;height:20px;padding:0 5px;border-radius:999px;background:${CORAL};border:2px solid ${INK};color:${INK};font-size:11px;font-weight:800;display:flex;align-items:center;justify-content:center">${this.local.chatUnread>9?'9+':this.local.chatUnread}</div>` : '';
-      chatFab = `<div style="position:fixed;right:16px;bottom:16px;z-index:70">
+      chatFab = `<div class="hud-chat">
         <div style="position:relative">
           <button data-action="toggleChat" aria-label="Chat" style="width:54px;height:54px;border-radius:50%;border:2.5px solid ${INK};background:${this.local.chatOpen?INK:CORAL};color:${this.local.chatOpen?'var(--cream)':INK};box-shadow:0 4px 0 ${INK};display:flex;align-items:center;justify-content:center">${this.local.chatOpen?this.iconClose(20,'var(--cream)'):this.iconChat(23)}</button>
           ${badge}
         </div>
       </div>`;
     }
-    this.hudRoot.innerHTML = `<div style="position:fixed;top:14px;right:16px;z-index:70">${soundBtn}</div>${chatFab}`;
+    // On phones, during a game the top-right corner belongs to each screen's
+    // own header (timers, titles), so the sound toggle moves into the chat
+    // panel there instead of floating on top of them.
+    const lobbyLike = ['home','setup','lobby'].includes(this.local.screen);
+    this.hudRoot.innerHTML = `<div class="hud-sound${lobbyLike?'':' is-game'}">${soundBtn}</div>${chatFab}`;
   }
 
   renderChatPanel(){
@@ -1507,8 +1512,8 @@ class Game {
         <div style="max-width:78%;display:flex;align-items:center;gap:8px;padding:9px 13px;border-radius:16px;${mine?'border-bottom-right-radius:4px':'border-bottom-left-radius:4px'};background:${mine?CORAL:'#fff'};border:2px solid ${INK};font-size:15px;font-weight:600;overflow-wrap:anywhere">${avatarSVG(m.avatar,20)}<span>${esc(m.text)}</span></div>
       </div>`;
     }).join('') || `<div style="text-align:center;color:var(--muted);font-size:14px;font-weight:700;padding:20px 0">Todavía no hay mensajes. ¡Decí algo!</div>`;
-    this.chatRoot.innerHTML = `<div style="position:fixed;right:16px;bottom:80px;z-index:69;width:min(340px, calc(100vw - 32px));max-height:min(60vh, 460px);display:flex;flex-direction:column;background:var(--cream);border:2.5px solid ${INK};border-radius:22px;box-shadow:0 8px 0 ${INK};overflow:hidden;animation:pop .3s cubic-bezier(.3,1.5,.5,1) both">
-      <div style="padding:12px 16px;border-bottom:2px solid var(--line);font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:16px">Chat de la partida</div>
+    this.chatRoot.innerHTML = `<div class="chat-panel" style="width:min(340px, calc(100vw - 32px));max-height:min(60vh, 460px);display:flex;flex-direction:column;background:var(--cream);border:2.5px solid ${INK};border-radius:22px;box-shadow:0 8px 0 ${INK};overflow:hidden;animation:pop .3s cubic-bezier(.3,1.5,.5,1) both">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px 10px 16px;border-bottom:2px solid var(--line)"><div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:16px">Chat de la partida</div><button data-action="toggleSound" aria-label="Sonido" style="width:34px;height:34px;border-radius:50%;border:2px solid ${INK};background:#fff;display:flex;align-items:center;justify-content:center;flex:0 0 auto">${this.soundOn?this.iconSoundOn(15):this.iconSoundOff(15)}</button></div>
       <div id="chatScroll" style="flex:1;min-height:120px;overflow-y:auto;padding:12px 14px;display:flex;flex-direction:column;gap:10px">${rows}</div>
       <div style="display:flex;gap:8px;padding:10px;border-top:2px solid var(--line)">
         <input data-role="chat-input" value="${esc(this.local.chatDraft)}" placeholder="Escribí algo…" autocomplete="off" style="flex:1;min-width:0;height:44px;border-radius:14px;border:2px solid ${INK};background:#fff;padding:0 14px;font-size:15px;font-weight:600;color:${INK};outline:none">
@@ -1963,8 +1968,8 @@ class Game {
     const gameCards = GAMES.map((g,i)=>this.gameCardHtml(g, 'pickGameFromHome', (0.15+i*0.08).toFixed(2)+'s')).join('');
     return `<div class="screen screen-wide" style="position:relative;overflow:hidden">
       <div style="position:absolute;inset:0;pointer-events:none;z-index:0">
-        <div style="position:absolute;top:2%;left:2%;animation:float 5s ease-in-out infinite"><div style="padding:9px 16px;border-radius:18px 18px 18px 4px;background:${CORAL};border:2px solid ${INK};font-weight:800;font-size:16px;transform:rotate(-8deg)">Che</div></div>
-        <div style="position:absolute;top:4%;right:2%;animation:float 6s ease-in-out .8s infinite"><div style="padding:9px 16px;border-radius:18px 18px 4px 18px;background:#fff;border:2px solid ${INK};font-weight:800;font-size:16px;transform:rotate(6deg)">Dale</div></div>
+        <div class="home-bubble home-bubble-l" style="animation:float 5s ease-in-out infinite"><div style="padding:9px 16px;border-radius:18px 18px 18px 4px;background:${CORAL};border:2px solid ${INK};font-weight:800;font-size:16px;transform:rotate(-8deg)">Che</div></div>
+        <div class="home-bubble home-bubble-r" style="animation:float 6s ease-in-out .8s infinite"><div style="padding:9px 16px;border-radius:18px 18px 4px 18px;background:#fff;border:2px solid ${INK};font-weight:800;font-size:16px;transform:rotate(6deg)">Dale</div></div>
       </div>
       <div style="position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;gap:14px;padding-top:clamp(44px,9vh,84px)">
         <div style="display:flex;gap:clamp(4px,1.2vw,8px)">
@@ -1972,12 +1977,12 @@ class Game {
         </div>
         <div class="heading" style="font-size:clamp(20px,5.5vw,26px);text-align:center;animation:rise .5s .4s both">Party games para jugar con amigos.</div>
       </div>
-      <div style="position:relative;z-index:1;display:flex;flex-direction:column;gap:12px;padding-top:30px">
-        <div style="text-align:center;font-size:13px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)">Juego individual</div>
-        <div style="display:flex;flex-wrap:wrap;justify-content:center;gap:14px;margin-top:10px">${gameCards}</div>
+      <div style="position:relative;z-index:1;display:flex;flex-direction:column;gap:14px;padding-top:30px">
+        <div class="section-label">Juego individual</div>
+        <div class="game-grid">${gameCards}</div>
       </div>
-      <div style="position:relative;z-index:1;padding-top:20px">${this.rondaCardHtml('pickGameFromHome','0.5s')}</div>
-      <div style="position:relative;z-index:1;width:100%;max-width:460px;margin:0 auto;display:flex;flex-direction:column;gap:14px;padding-top:22px;padding-bottom:24px">
+      <div style="position:relative;z-index:1;padding-top:6px">${this.rondaCardHtml('pickGameFromHome','0.5s')}</div>
+      <div style="position:relative;z-index:1;width:100%;max-width:560px;margin:0 auto;display:flex;flex-direction:column;gap:14px;padding-top:22px;padding-bottom:24px">
         <div style="display:flex;flex-direction:column;gap:8px;padding:14px;border-radius:20px;background:#fff;border:2px solid var(--line)">
           <div style="font-size:14px;font-weight:700;color:var(--muted);padding-left:4px">¿Te pasaron un código?</div>
           <div style="display:flex;gap:10px">
@@ -2036,7 +2041,7 @@ class Game {
       const tag = p.isBot ? 'Jugador IA' : (p.id===this.myId ? (p.id===hostId?'Vos · Anfitrión':'Vos') : (p.id===hostId?'Anfitrión':'Listo para jugar'));
       return `<div style="position:relative;display:flex;align-items:center;gap:12px;padding:12px;border-radius:20px;background:#fff;border:2px solid ${INK};box-shadow:0 3px 0 ${INK};animation:pop .45s cubic-bezier(.3,1.5,.5,1) both">
         <div style="width:46px;height:46px;flex:0 0 auto">${avatarSVG(p.avatar,46)}</div>
-        <div style="min-width:0;display:flex;flex-direction:column;gap:1px"><div style="font-weight:800;font-size:17px;overflow:hidden;text-overflow:ellipsis">${esc(p.name)}</div><div style="display:flex;align-items:center;gap:4px;font-size:13px;font-weight:600;color:var(--muted)">${p.isBot?this.iconRobot(13):''}${tag}</div></div>
+        <div style="min-width:0;display:flex;flex-direction:column;gap:1px"><div class="one-line" style="font-weight:800;font-size:17px">${esc(p.name)}</div><div class="one-line" style="display:flex;align-items:center;gap:4px;font-size:13px;font-weight:600;color:var(--muted)">${p.isBot?this.iconRobot(13):''}<span class="one-line">${tag}</span></div></div>
         ${p.isBot && this.isHost && s.phase==='lobby' ? `<button data-action="removeBot" data-pid="${p.id}" aria-label="Quitar bot" style="position:absolute;top:6px;right:6px;width:24px;height:24px;border-radius:50%;border:2px solid ${INK};background:var(--cream);display:flex;align-items:center;justify-content:center">${this.iconClose(11)}</button>` : ''}
       </div>`;
     }).join('');
@@ -2108,7 +2113,7 @@ class Game {
           <div class="heading" style="font-size:22px">Jugadores</div>
           <div class="heading" style="font-size:22px">${pl.length}</div>
         </div>
-        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px">${slots}</div>
+        <div class="player-grid">${slots}</div>
       </div>
       <div style="display:flex;flex-direction:column;gap:14px;${lowerWide?'':'width:100%;max-width:720px;margin:0 auto'}">${lowerSection}</div>
     </div>`;
@@ -2133,7 +2138,7 @@ class Game {
     // a CSS animation with fill-mode:both keeps "owning" any property it
     // touches even after it finishes — if it were on the button itself, it
     // would silently block :hover from ever moving that same button again.
-    return `<div style="animation:rise .5s both;animation-delay:${delay||'0s'};display:flex;flex:0 1 240px;max-width:250px">
+    return `<div class="game-card-wrap" style="animation:rise .5s both;animation-delay:${delay||'0s'}">
       <button class="press-card" data-action="${actionName}" data-game="${g.id}" style="position:relative;display:flex;flex-direction:column;justify-content:space-between;gap:12px;padding:20px;border-radius:24px;background:#fff;border:2.5px solid ${INK};text-align:left;width:100%;height:100%">
         ${g.isNew?`<div style="position:absolute;top:16px;right:16px;padding:5px 12px;border-radius:999px;background:${MINT};border:2px solid ${INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:11px;letter-spacing:.06em">NUEVO</div>`:''}
         <div style="display:flex;flex-direction:column;gap:12px">
@@ -2147,18 +2152,18 @@ class Game {
           </div>
         </div>
         <div style="display:flex;flex-wrap:wrap;gap:8px">
-          <div style="display:flex;align-items:center;gap:5px;padding:6px 12px;border-radius:999px;background:var(--cream);border:2px solid var(--line);font-size:13px;font-weight:700">${this.iconPersonSmall(13)} ${g.min}–${g.max} jugadores</div>
-          <div style="display:flex;align-items:center;gap:5px;padding:6px 12px;border-radius:999px;background:var(--cream);border:2px solid var(--line);font-size:13px;font-weight:700">${this.iconClock(14)} ≈ ${est} min</div>
+          <div class="meta-chip">${this.iconPersonSmall(14)} ${g.min}–${g.max} jugadores</div>
+          <div class="meta-chip">${this.iconClock(14)} ≈ ${est} min</div>
         </div>
       </button>
     </div>`;
   }
   viewGamePicker(){
     const cards = GAMES.map((g,i)=>this.gameCardHtml(g, 'pickGame', (i*0.06)+'s')).join('');
-    return `<div style="display:flex;flex-direction:column;gap:10px">
-      <div style="font-size:13px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);padding:0 4px">¿A qué jugamos?</div>
-      <div style="display:flex;flex-wrap:wrap;justify-content:center;gap:14px">${cards}</div>
-      <div style="padding-top:6px">${this.rondaCardHtml('pickGame','0.3s')}</div>
+    return `<div style="display:flex;flex-direction:column;gap:14px;padding-top:8px">
+      <div class="section-label">¿A qué jugamos?</div>
+      <div class="game-grid">${cards}</div>
+      <div>${this.rondaCardHtml('pickGame','0.3s')}</div>
     </div>`;
   }
   // Distinct/starred card for Modo Ronda — deliberately different from the
@@ -2361,11 +2366,11 @@ class Game {
       // without this guard every row would replay its "appear" animation a
       // second time, looking like the whole screen loaded twice.
       const entrance = !ph ? `animation:rise .4s cubic-bezier(.3,1.5,.5,1) both;animation-delay:${(idx*0.06).toFixed(2)}s` : '';
-      return `<div style="position:absolute;left:0;right:0;top:${idx*104}px;min-height:88px;display:flex;align-items:center;gap:12px;padding:10px 16px 10px 10px;border-radius:22px;background:${bg};border:2px solid ${INK};box-shadow:0 4px 0 ${INK};transition:top .9s cubic-bezier(.34,1.45,.64,1);${entrance}">
+      return `<div class="rank-row" style="position:absolute;left:0;right:0;top:${idx*104}px;min-height:88px;display:flex;align-items:center;gap:12px;padding:10px 16px 10px 10px;border-radius:22px;background:${bg};border:2px solid ${INK};box-shadow:0 4px 0 ${INK};transition:top .9s cubic-bezier(.34,1.45,.64,1);${entrance}">
         <div style="flex:0 0 auto;width:44px;text-align:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:32px">${idx+1}</div>
         <div style="width:46px;height:46px;flex:0 0 auto">${avatarSVG(p.avatar,46)}</div>
         <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
-          <div style="font-weight:800;font-size:18px">${esc(label)}</div>
+          <div class="one-line" style="font-weight:800;font-size:18px">${esc(label)}</div>
           ${ph?`<div style="font-size:13px;font-weight:800;color:${deltaColor};animation:rise .3s both">${deltaText}</div>`:''}
         </div>
         ${ph?`<div style="padding:4px 10px;border-radius:999px;background:${MINT};border:2px solid ${INK};font-weight:800;font-size:14px;animation:pop .4s both">+${cur[p.id]-(prevT?prevT[p.id]:0)}</div>`:''}
@@ -2412,7 +2417,7 @@ class Game {
       return `<div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:${i<nr.length-1?'2px solid var(--panel-line)':'0'}">
         <div style="width:28px;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:20px">${i+1}</div>
         <div style="width:38px;height:38px;flex:0 0 auto">${avatarSVG(byId[id].avatar,38)}</div>
-        <div style="flex:1;min-width:0;font-weight:800;font-size:17px">${esc(label)}</div>
+        <div class="one-line" style="flex:1;min-width:0;font-weight:800;font-size:17px">${esc(label)}</div>
         <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:20px">${tot[id]} pts</div>
       </div>`;
     }).join('');
@@ -2448,7 +2453,7 @@ class Game {
     </div>`).join('');
     const confettiHtml = this.confetti.map(c=>`<div style="position:absolute;top:-20px;left:${c.left};width:${c.w};height:${c.h};border-radius:3px;background:${c.color};border:1.5px solid ${INK};animation:fall ${c.dur} linear ${c.delay} infinite"></div>`).join('');
     const bottom = this.isHost
-      ? `<button class="btn-primary" style="flex:1;min-width:0;height:auto;min-height:56px;padding:8px 6px;font-size:14px" data-action="playAgain">JUGAR DE NUEVO</button><button class="btn-secondary" style="flex:1;min-width:0;height:auto;min-height:56px;padding:8px 6px;font-size:14px" data-action="backToPortal">ELEGIR OTRO JUEGO</button>`
+      ? `<button class="btn-primary final-btn" data-action="playAgain">JUGAR DE NUEVO</button><button class="btn-secondary final-btn" data-action="backToPortal">ELEGIR OTRO JUEGO</button>`
       : `<div style="height:54px;border-radius:16px;border:2px solid ${INK};background:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;color:var(--muted)">Esperando a ${esc(this.playerById(s.hostId)?.name||'el anfitrión')}…</div>`;
     return `<div style="position:relative;min-height:100vh;overflow:hidden">
       <div style="position:fixed;inset:0;pointer-events:none;z-index:1;overflow:hidden">${confettiHtml}</div>
@@ -2466,7 +2471,7 @@ class Game {
           <div class="final-stats">${statsHtml}</div>
         </div>
         <div class="sticky-bottom">
-          <div style="max-width:560px;margin:0 auto;padding:0 14px;display:flex;flex-direction:row;align-items:center;gap:12px">${bottom}</div>
+          <div class="final-actions">${bottom}</div>
         </div>
       </div>
     </div>`;
@@ -2577,13 +2582,13 @@ class Game {
           </div>`;
     return `<div style="min-height:100vh;display:flex;flex-direction:column">
       <div style="position:sticky;top:0;z-index:10;background:var(--cream)">
-        <div style="max-width:1500px;margin:0 auto;padding:12px 20px;display:flex;align-items:center;gap:12px">
+        <div class="game-hdr" style="max-width:1500px;margin:0 auto;display:flex;align-items:center;gap:12px">
           <button class="icon-btn" data-action="askLeave" aria-label="Salir">${this.iconClose()}</button>
-          <div style="flex:1;min-width:0;display:flex;align-items:center;gap:8px;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:18px">${this.iconPalette(18)}${isMe?'Estás dibujando':esc(drawer?drawer.name:'?')+' está dibujando'}</div>
+          <div style="flex:1;min-width:0;display:flex;align-items:center;gap:8px;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:18px">${this.iconPalette(18)}<span class="one-line">${isMe?'Estás dibujando':esc(drawer?drawer.name:'?')+' está dibujando'}</span></div>
           <div data-el="dTimerBox" style="display:flex;align-items:center;gap:8px;height:46px;padding:0 14px;border-radius:999px;border:2px solid ${INK};background:#fff;box-shadow:0 3px 0 ${INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:22px">${this.iconClock()}<span data-el="dTimerText">${mmss(cfg.drawTime)}</span></div>
         </div>
       </div>
-      <div style="flex:1;width:100%;max-width:1500px;margin:0 auto;padding:16px 20px 20px;display:flex;flex-wrap:wrap;gap:22px;align-items:stretch">
+      <div style="flex:1;width:100%;max-width:1500px;margin:0 auto;padding:16px 20px 20px;display:flex;flex-wrap:wrap;gap:22px;align-items:stretch;align-content:flex-start">
         <div style="flex:2.2 1 620px;min-width:0;display:flex;flex-direction:column;gap:10px">
           ${isMe?`<div style="background:${YEL};border:2px solid ${INK};border-radius:16px;padding:10px 14px;text-align:center"><span style="font-weight:800;font-size:15px">TU PALABRA ES: ${esc((this.local.dChosenWord||'').toUpperCase())}</span><div style="font-size:12px;font-weight:700;color:var(--muted)">No la muestres.</div></div>`:''}
           ${hintChip}
@@ -2650,11 +2655,11 @@ class Game {
       // without this guard every row would replay its "appear" animation a
       // second time, looking like the whole screen loaded twice.
       const entrance = !ph ? `animation:rise .4s cubic-bezier(.3,1.5,.5,1) both;animation-delay:${(idx*0.06).toFixed(2)}s` : '';
-      return `<div style="position:absolute;left:0;right:0;top:${idx*104}px;min-height:88px;display:flex;align-items:center;gap:12px;padding:10px 16px 10px 10px;border-radius:22px;background:${bg};border:2px solid ${INK};box-shadow:0 4px 0 ${INK};transition:top .9s cubic-bezier(.34,1.45,.64,1);${entrance}">
+      return `<div class="rank-row" style="position:absolute;left:0;right:0;top:${idx*104}px;min-height:88px;display:flex;align-items:center;gap:12px;padding:10px 16px 10px 10px;border-radius:22px;background:${bg};border:2px solid ${INK};box-shadow:0 4px 0 ${INK};transition:top .9s cubic-bezier(.34,1.45,.64,1);${entrance}">
         <div style="flex:0 0 auto;width:44px;text-align:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:32px">${idx+1}</div>
         <div style="width:46px;height:46px;flex:0 0 auto">${avatarSVG(p.avatar,46)}</div>
         <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
-          <div style="font-weight:800;font-size:18px">${esc(label)}</div>
+          <div class="one-line" style="font-weight:800;font-size:18px">${esc(label)}</div>
           ${ph?`<div style="font-size:13px;font-weight:800;color:${deltaColor};animation:rise .3s both">${deltaText}</div>`:''}
         </div>
         ${ph?`<div style="padding:4px 10px;border-radius:999px;background:${MINT};border:2px solid ${INK};font-weight:800;font-size:14px;animation:pop .4s both">+${cur[p.id]-(prevT?prevT[p.id]:0)}</div>`:''}
@@ -2701,7 +2706,7 @@ class Game {
       return `<div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:${i<nr.length-1?'2px solid var(--panel-line)':'0'}">
         <div style="width:28px;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:20px">${i+1}</div>
         <div style="width:38px;height:38px;flex:0 0 auto">${avatarSVG(byId[id].avatar,38)}</div>
-        <div style="flex:1;min-width:0;font-weight:800;font-size:17px">${esc(label)}</div>
+        <div class="one-line" style="flex:1;min-width:0;font-weight:800;font-size:17px">${esc(label)}</div>
         <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:20px">${tot[id]} pts</div>
       </div>`;
     }).join('');
@@ -2733,7 +2738,7 @@ class Game {
     </div>`).join('');
     const confettiHtml = this.confetti.map(c=>`<div style="position:absolute;top:-20px;left:${c.left};width:${c.w};height:${c.h};border-radius:3px;background:${c.color};border:1.5px solid ${INK};animation:fall ${c.dur} linear ${c.delay} infinite"></div>`).join('');
     const bottom = this.isHost
-      ? `<button class="btn-primary" style="flex:1;min-width:0;height:auto;min-height:56px;padding:8px 6px;font-size:14px" data-action="playAgain">JUGAR DE NUEVO</button><button class="btn-secondary" style="flex:1;min-width:0;height:auto;min-height:56px;padding:8px 6px;font-size:14px" data-action="backToPortal">ELEGIR OTRO JUEGO</button>`
+      ? `<button class="btn-primary final-btn" data-action="playAgain">JUGAR DE NUEVO</button><button class="btn-secondary final-btn" data-action="backToPortal">ELEGIR OTRO JUEGO</button>`
       : `<div style="height:54px;border-radius:16px;border:2px solid ${INK};background:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;color:var(--muted)">Esperando a ${esc(this.playerById(s.hostId)?.name||'el anfitrión')}…</div>`;
     return `<div style="position:relative;min-height:100vh;overflow:hidden">
       <div style="position:fixed;inset:0;pointer-events:none;z-index:1;overflow:hidden">${confettiHtml}</div>
@@ -2751,7 +2756,7 @@ class Game {
           <div class="final-stats">${statsHtml}</div>
         </div>
         <div class="sticky-bottom">
-          <div style="max-width:560px;margin:0 auto;padding:0 14px;display:flex;flex-direction:row;align-items:center;gap:12px">${bottom}</div>
+          <div class="final-actions">${bottom}</div>
         </div>
       </div>
     </div>`;
@@ -2823,7 +2828,7 @@ class Game {
       const label = p.id===this.myId ? p.name+' (vos)' : p.name;
       return `<div style="display:flex;align-items:center;gap:12px;padding:10px 0">
         <div style="width:42px;height:42px;flex:0 0 auto">${avatarSVG(p.avatar,42)}</div>
-        <div style="flex:1;min-width:0;font-weight:800;font-size:17px">${esc(label)}</div>
+        <div class="one-line" style="flex:1;min-width:0;font-weight:800;font-size:17px">${esc(label)}</div>
         ${done ? `<div style="display:flex;align-items:center;gap:6px;padding:6px 12px;border-radius:999px;background:${MINT};border:2px solid ${INK};font-size:13px;font-weight:800;animation:pop .4s both">${this.iconCheckSmall()}Listo</div>`
                : `<div style="display:flex;align-items:center;gap:6px;padding:6px 12px;border-radius:999px;background:var(--panel-line);font-size:13px;font-weight:800;color:var(--muted)">Escribiendo<span style="display:flex;gap:2px"><span style="animation:blink 1.2s infinite">•</span><span style="animation:blink 1.2s .2s infinite">•</span><span style="animation:blink 1.2s .4s infinite">•</span></span></div>`}
       </div>`;
@@ -2976,7 +2981,7 @@ class Game {
         <div data-el="scoreDetail" style="flex:1 1 340px;min-width:0;background:#fff;border:2px solid ${INK};border-radius:24px;box-shadow:0 4px 0 ${INK};padding:16px 18px;display:flex;flex-direction:column;gap:4px">${this.scoreDetailHtml()}</div>
       </div>
       <div class="sticky-bottom">
-        <div style="max-width:520px;margin:0 auto"><button class="btn-primary" data-action="goRanking">VER CLASIFICACIÓN</button></div>
+        <div style="width:100%;max-width:520px;margin:0 auto"><button class="btn-primary" data-action="goRanking">VER CLASIFICACIÓN</button></div>
       </div>
     </div>`;
   }
@@ -2998,11 +3003,11 @@ class Game {
       // without this guard every row would replay its "appear" animation a
       // second time, looking like the whole screen loaded twice.
       const entrance = !ph ? `animation:rise .4s cubic-bezier(.3,1.5,.5,1) both;animation-delay:${(idx*0.06).toFixed(2)}s` : '';
-      return `<div style="position:absolute;left:0;right:0;top:${idx*104}px;min-height:88px;display:flex;align-items:center;gap:12px;padding:10px 16px 10px 10px;border-radius:22px;background:${bg};border:2px solid ${INK};box-shadow:0 4px 0 ${INK};transition:top .9s cubic-bezier(.34,1.45,.64,1);${entrance}">
+      return `<div class="rank-row" style="position:absolute;left:0;right:0;top:${idx*104}px;min-height:88px;display:flex;align-items:center;gap:12px;padding:10px 16px 10px 10px;border-radius:22px;background:${bg};border:2px solid ${INK};box-shadow:0 4px 0 ${INK};transition:top .9s cubic-bezier(.34,1.45,.64,1);${entrance}">
         <div style="flex:0 0 auto;width:44px;text-align:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:32px">${idx+1}</div>
         <div style="width:46px;height:46px;flex:0 0 auto">${avatarSVG(p.avatar,46)}</div>
         <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
-          <div style="font-weight:800;font-size:18px">${esc(label)}</div>
+          <div class="one-line" style="font-weight:800;font-size:18px">${esc(label)}</div>
           ${ph?`<div style="font-size:13px;font-weight:800;color:${deltaColor};animation:rise .3s both">${deltaText}</div>`:''}
         </div>
         ${ph?`<div style="padding:4px 10px;border-radius:999px;background:${MINT};border:2px solid ${INK};font-weight:800;font-size:14px;animation:pop .4s both">+${cur[p.id]-(prevT?prevT[p.id]:0)}</div>`:''}
@@ -3051,7 +3056,7 @@ class Game {
       return `<div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:${i<nr.length-1?'2px solid var(--panel-line)':'0'}">
         <div style="width:28px;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:20px">${i+1}</div>
         <div style="width:38px;height:38px;flex:0 0 auto">${avatarSVG(byId[id].avatar,38)}</div>
-        <div style="flex:1;min-width:0;font-weight:800;font-size:17px">${esc(label)}</div>
+        <div class="one-line" style="flex:1;min-width:0;font-weight:800;font-size:17px">${esc(label)}</div>
         <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:20px">${tot[id]} pts</div>
       </div>`;
     }).join('');
@@ -3080,7 +3085,7 @@ class Game {
     </div>`).join('');
     const confettiHtml = this.confetti.map(c=>`<div style="position:absolute;top:-20px;left:${c.left};width:${c.w};height:${c.h};border-radius:3px;background:${c.color};border:1.5px solid ${INK};animation:fall ${c.dur} linear ${c.delay} infinite"></div>`).join('');
     const bottom = this.isHost
-      ? `<button class="btn-primary" style="flex:1;min-width:0;height:auto;min-height:56px;padding:8px 6px;font-size:14px" data-action="playAgain">JUGAR DE NUEVO</button><button class="btn-secondary" style="flex:1;min-width:0;height:auto;min-height:56px;padding:8px 6px;font-size:14px" data-action="backToPortal">ELEGIR OTRO JUEGO</button>`
+      ? `<button class="btn-primary final-btn" data-action="playAgain">JUGAR DE NUEVO</button><button class="btn-secondary final-btn" data-action="backToPortal">ELEGIR OTRO JUEGO</button>`
       : `<div style="height:54px;border-radius:16px;border:2px solid ${INK};background:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;color:var(--muted)">Esperando a ${esc(this.playerById(this.state.hostId)?.name||'el anfitrión')}…</div>`;
     return `<div style="position:relative;min-height:100vh;overflow:hidden">
       <div style="position:fixed;inset:0;pointer-events:none;z-index:1;overflow:hidden">${confettiHtml}</div>
@@ -3098,7 +3103,7 @@ class Game {
           <div class="final-stats">${statsHtml}</div>
         </div>
         <div class="sticky-bottom">
-          <div style="max-width:560px;margin:0 auto;padding:0 14px;display:flex;flex-direction:row;align-items:center;gap:12px">${bottom}</div>
+          <div class="final-actions">${bottom}</div>
         </div>
       </div>
     </div>`;
@@ -3722,13 +3727,15 @@ class Game {
         <div style="text-align:center;font-size:13px;font-weight:800;letter-spacing:.1em;text-transform:uppercase">${isMyTurn?'Tu turno — dá tu pista':'Turno de '+esc(turnPlayer?turnPlayer.name:'?')}</div>
         <div style="display:flex;flex-direction:column;gap:8px">${rows}</div>
       </div>
-      <div class="sticky-bottom" style="margin:0 -20px;padding:16px 20px 20px">
+      <div class="sticky-bottom" style="margin:0;padding:16px 20px 20px">
+        <div style="width:100%;max-width:520px;margin:0 auto">
         ${isMyTurn
           ? `<div style="display:flex;gap:10px">
               <input data-role="imp-clue-input" value="${esc(this.local.impClueDraft)}" placeholder="Tu pista" autocomplete="off" maxlength="40" style="flex:1;min-width:0;height:56px;border-radius:16px;border:2px solid ${INK};background:#fff;padding:0 18px;font-size:17px;font-weight:700;color:${INK};outline:none">
               <button class="btn-primary" data-action="impSendClue" style="width:auto;padding:0 22px">ENVIAR</button>
             </div>`
           : `<div style="height:56px;border-radius:16px;border:2px solid ${INK};background:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;color:var(--muted)">Esperando la pista de ${esc(turnPlayer?turnPlayer.name:'?')}…</div>`}
+        </div>
       </div>
     </div>`;
   }
@@ -3902,11 +3909,11 @@ class Game {
       const deltaText = d>0?'▲ Subió '+d : d<0?'▼ Bajó '+(-d) : 'Sin cambios';
       const deltaColor = d>0?'#0E8A66':d<0?'#B3341A':INK;
       const entrance = !ph ? `animation:rise .4s cubic-bezier(.3,1.5,.5,1) both;animation-delay:${(idx*0.06).toFixed(2)}s` : '';
-      return `<div style="position:absolute;left:0;right:0;top:${idx*104}px;min-height:88px;display:flex;align-items:center;gap:12px;padding:10px 16px 10px 10px;border-radius:22px;background:${bg};border:2px solid ${INK};box-shadow:0 4px 0 ${INK};transition:top .9s cubic-bezier(.34,1.45,.64,1);${entrance}">
+      return `<div class="rank-row" style="position:absolute;left:0;right:0;top:${idx*104}px;min-height:88px;display:flex;align-items:center;gap:12px;padding:10px 16px 10px 10px;border-radius:22px;background:${bg};border:2px solid ${INK};box-shadow:0 4px 0 ${INK};transition:top .9s cubic-bezier(.34,1.45,.64,1);${entrance}">
         <div style="flex:0 0 auto;width:44px;text-align:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:32px">${idx+1}</div>
         <div style="width:46px;height:46px;flex:0 0 auto">${avatarSVG(p.avatar,46)}</div>
         <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
-          <div style="font-weight:800;font-size:18px">${esc(label)}</div>
+          <div class="one-line" style="font-weight:800;font-size:18px">${esc(label)}</div>
           ${ph?`<div style="font-size:13px;font-weight:800;color:${deltaColor};animation:rise .3s both">${deltaText}</div>`:''}
         </div>
         ${ph?`<div style="padding:4px 10px;border-radius:999px;background:${MINT};border:2px solid ${INK};font-weight:800;font-size:14px;animation:pop .4s both">+${cur[p.id]-(prevT?prevT[p.id]:0)}</div>`:''}
@@ -3952,7 +3959,7 @@ class Game {
       return `<div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:${i<nr.length-1?'2px solid var(--panel-line)':'0'}">
         <div style="width:28px;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:20px">${i+1}</div>
         <div style="width:38px;height:38px;flex:0 0 auto">${avatarSVG(byId[id].avatar,38)}</div>
-        <div style="flex:1;min-width:0;font-weight:800;font-size:17px">${esc(label)}</div>
+        <div class="one-line" style="flex:1;min-width:0;font-weight:800;font-size:17px">${esc(label)}</div>
         <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:20px">${tot[id]} pts</div>
       </div>`;
     }).join('');
@@ -3964,7 +3971,7 @@ class Game {
     </div>`).join('');
     const confettiHtml = this.confetti.map(c=>`<div style="position:absolute;top:-20px;left:${c.left};width:${c.w};height:${c.h};border-radius:3px;background:${c.color};border:1.5px solid ${INK};animation:fall ${c.dur} linear ${c.delay} infinite"></div>`).join('');
     const bottom = this.isHost
-      ? `<button class="btn-primary" style="flex:1;min-width:0;height:auto;min-height:56px;padding:8px 6px;font-size:14px" data-action="playAgain">JUGAR DE NUEVO</button><button class="btn-secondary" style="flex:1;min-width:0;height:auto;min-height:56px;padding:8px 6px;font-size:14px" data-action="backToPortal">ELEGIR OTRO JUEGO</button>`
+      ? `<button class="btn-primary final-btn" data-action="playAgain">JUGAR DE NUEVO</button><button class="btn-secondary final-btn" data-action="backToPortal">ELEGIR OTRO JUEGO</button>`
       : `<div style="height:54px;border-radius:16px;border:2px solid ${INK};background:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;color:var(--muted)">Esperando a ${esc(this.playerById(s.hostId)?.name||'el anfitrión')}…</div>`;
     return `<div style="position:relative;min-height:100vh;overflow:hidden">
       <div style="position:fixed;inset:0;pointer-events:none;z-index:1;overflow:hidden">${confettiHtml}</div>
@@ -3982,7 +3989,7 @@ class Game {
           <div class="final-stats">${statsHtml}</div>
         </div>
         <div class="sticky-bottom">
-          <div style="max-width:560px;margin:0 auto;padding:0 14px;display:flex;flex-direction:row;align-items:center;gap:12px">${bottom}</div>
+          <div class="final-actions">${bottom}</div>
         </div>
       </div>
     </div>`;
@@ -4261,7 +4268,7 @@ class Game {
       return `<div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:${i<nr.length-1?'2px solid var(--panel-line)':'0'}">
         <div style="width:28px;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:20px">${i+1}</div>
         <div style="width:38px;height:38px;flex:0 0 auto">${avatarSVG(byId[id].avatar,38)}</div>
-        <div style="flex:1;min-width:0;font-weight:800;font-size:17px">${esc(label)}</div>
+        <div class="one-line" style="flex:1;min-width:0;font-weight:800;font-size:17px">${esc(label)}</div>
         <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:20px">${m.scores[id]||0} pts</div>
       </div>`;
     }).join('');
@@ -4274,7 +4281,7 @@ class Game {
     }).join('');
     const confettiHtml = this.confetti.map(c=>`<div style="position:absolute;top:-20px;left:${c.left};width:${c.w};height:${c.h};border-radius:3px;background:${c.color};border:1.5px solid ${INK};animation:fall ${c.dur} linear ${c.delay} infinite"></div>`).join('');
     const bottom = this.isHost
-      ? `<button class="btn-primary" style="flex:1;min-width:0;height:auto;min-height:56px;padding:8px 6px;font-size:14px" data-action="rondaPlayAgain">JUGAR OTRA VEZ</button><button class="btn-secondary" style="flex:1;min-width:0;height:auto;min-height:56px;padding:8px 6px;font-size:14px" data-action="backToPortal">VOLVER AL INICIO</button>`
+      ? `<button class="btn-primary final-btn" data-action="rondaPlayAgain">JUGAR OTRA VEZ</button><button class="btn-secondary final-btn" data-action="backToPortal">VOLVER AL INICIO</button>`
       : `<div style="height:54px;border-radius:16px;border:2px solid ${INK};background:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;color:var(--muted)">Esperando a ${esc(this.playerById(s.hostId)?.name||'el anfitrión')}…</div>`;
     return `<div style="position:relative;min-height:100vh;overflow:hidden">
       <div style="position:fixed;inset:0;pointer-events:none;z-index:1;overflow:hidden">${confettiHtml}</div>
@@ -4295,7 +4302,7 @@ class Game {
           </div>
         </div>
         <div class="sticky-bottom">
-          <div style="max-width:560px;margin:0 auto;padding:0 14px;display:flex;flex-direction:row;align-items:center;gap:12px">${bottom}</div>
+          <div class="final-actions">${bottom}</div>
         </div>
       </div>
     </div>`;
