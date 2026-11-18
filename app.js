@@ -1708,6 +1708,8 @@ class Game {
         else if(this.state.gameId==='impostor') this.impPlayAgain();
         else if(this.state.gameId==='makeitmeme') this.mmPlayAgain();
       },
+      avatarPrev: (t)=>{ const k=t.dataset.trait, n=Number(t.dataset.count), av=normalizeAvatar(this.local.avatar); this.local.avatar = { ...av, [k]:(av[k]-1+n)%n }; saveAvatar(this.local.avatar); this.refreshAvatarUI(); },
+      avatarNext: (t)=>{ const k=t.dataset.trait, n=Number(t.dataset.count), av=normalizeAvatar(this.local.avatar); this.local.avatar = { ...av, [k]:(av[k]+1)%n }; saveAvatar(this.local.avatar); this.refreshAvatarUI(); },
       avatarSet: (t)=>{ const k=t.dataset.trait, v=Number(t.dataset.val); this.local.avatar = { ...normalizeAvatar(this.local.avatar), [k]:v }; saveAvatar(this.local.avatar); this.refreshAvatarUI(); },
       avatarTab: (t)=>{ this.local.avatarTab = t.dataset.trait; this.refreshAvatarUI(); },
       avatarRandom: ()=>{ this.local.avatar = randomAvatar(); saveAvatar(this.local.avatar); this.refreshAvatarUI(); },
@@ -1859,26 +1861,24 @@ class Game {
   }
   avatarPickerInner(compact){
     const av = normalizeAvatar(this.local.avatar);
-    const previewSize = compact ? 92 : 116;
-    const tabs = AVATAR_TRAITS.filter(t=>t.key!=='skin');
-    const cur = tabs.find(t=>t.key===this.local.avatarTab) || tabs[0];
-    const tabBtns = tabs.map(t=>`<button class="av-tab${t.key===cur.key?' on':''}" data-action="avatarTab" data-trait="${t.key}">${t.label}</button>`).join('');
-    // each option is drawn already applied to your own character
-    const tiles = cur.names.map((n,i)=>`<button class="av-tile${av[cur.key]===i?' on':''}" data-action="avatarSet" data-trait="${cur.key}" data-val="${i}" title="${esc(n)}" aria-label="${esc(cur.label)}: ${esc(n)}">${avatarSVG({...av,[cur.key]:i}, compact?40:46)}</button>`).join('');
-    const colors = FACE_COLORS.map((c,i)=>`<button class="av-color${av.skin===i?' on':''}" data-action="avatarSet" data-trait="skin" data-val="${i}" style="background:${c}" aria-label="Color ${i+1}"></button>`).join('');
+    const previewSize = compact ? 84 : 104;
+    const rows = AVATAR_TRAITS.map(t=>`<div class="av-row">
+        <div class="av-row-label">${t.label}</div>
+        <div class="av-row-ctl">
+          <button class="av-arrow" data-action="avatarPrev" data-trait="${t.key}" data-count="${t.count}" aria-label="${t.label} anterior">◀</button>
+          <div class="av-row-value">${esc(t.names[av[t.key]])}</div>
+          <button class="av-arrow" data-action="avatarNext" data-trait="${t.key}" data-count="${t.count}" aria-label="${t.label} siguiente">▶</button>
+        </div>
+      </div>`).join('');
     return `<div class="av-picker">
       <div class="av-preview">
         <div style="width:${previewSize}px;height:${previewSize}px">${avatarSVG(av, previewSize)}</div>
         <div class="av-preview-side">
           <div class="av-kicker">Armá tu personaje</div>
-          <div class="av-current">${esc(cur.label)}: <b>${esc(cur.names[av[cur.key]])}</b></div>
           <button class="av-dice" data-action="avatarRandom">🎲 Al azar</button>
         </div>
       </div>
-      <div class="av-tabs">${tabBtns}</div>
-      <div class="av-grid">${tiles}</div>
-      <div class="av-kicker" style="margin-top:2px">Color</div>
-      <div class="av-colors">${colors}</div>
+      <div class="av-rows">${rows}</div>
     </div>`;
   }
   refreshAvatarUI(){
