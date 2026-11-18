@@ -149,3 +149,48 @@ a:hover{color:var(--coral)}
   .final-ranking{grid-column:1;max-width:460px;margin:0 auto}
   .final-stats{grid-column:1;justify-self:center;max-width:460px}
 }
+
+/* ================= Make It Meme ================= */
+.mm-meme{position:relative;container-type:inline-size;width:100%;border-radius:18px;overflow:hidden;border:2.5px solid var(--ink);background:#15131F;box-shadow:0 5px 0 var(--ink)}
+.mm-meme img{display:block;width:100%;height:100%;object-fit:cover;user-select:none;-webkit-user-select:none;-webkit-user-drag:none;pointer-events:none}
+.mm-cap{
+  position:absolute;left:4%;right:4%;text-align:center;pointer-events:none;
+  font-family:'Bricolage Grotesque',sans-serif;font-weight:800;text-transform:uppercase;
+  color:#fff;line-height:1.04;letter-spacing:.01em;overflow-wrap:anywhere;
+  text-shadow:-.06em -.06em 0 #000,.06em -.06em 0 #000,-.06em .06em 0 #000,.06em .06em 0 #000,0 .07em 0 #000,0 -.07em 0 #000,.07em 0 0 #000,-.07em 0 0 #000;
+}
+.mm-cap-top{top:3.5%}
+.mm-cap-bottom{bottom:3.5%}
+.mm-cap:empty{display:none}
+
+.mm-input{width:100%;height:54px;border-radius:16px;border:2px solid var(--ink);background:#fff;padding:0 50px 0 16px;font-size:17px;font-weight:700;color:var(--ink);outline:none;transition:box-shadow .15s}
+.mm-input:focus{box-shadow:0 0 0 4px rgba(255,107,74,.28)}
+
+/* Phone: template on top, inputs below. PC / TV: template big on the left,
+   inputs + who-already-sent on the right. */
+.mm-stage{display:grid;grid-template-columns:1fr;gap:18px;align-items:start}
+@media (min-width:900px){ .mm-stage{grid-template-columns:minmax(0,1.5fr) minmax(300px,1fr)} }
+
+.mm-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:18px;align-items:start}
+@media (min-width:900px){ .mm-grid-big{grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:24px} }
+.mm-results{row-gap:26px;padding-top:6px}
+.mm-hall{grid-template-columns:repeat(auto-fill,minmax(180px,1fr))}
+
+.mm-vote-card{position:relative;display:block;width:100%;padding:0;border:0;background:none;text-align:left;transition:transform .18s cubic-bezier(.3,1.5,.5,1),opacity .2s}
+.mm-vote-card .mm-meme{transition:box-shadow .18s}
+.mm-vote-card:not(:disabled):hover{transform:translateY(-4px)}
+.mm-vote-card.is-picked{transform:translateY(-4px) scale(1.01)}
+.mm-vote-card.is-picked .mm-meme{box-shadow:0 0 0 5px var(--mint),0 8px 0 var(--ink)}
+.mm-vote-card.is-dim{opacity:.45}
+.mm-vote-card:disabled{cursor:default}
+@media (hover:none){ .mm-vote-card:not(:disabled):hover{transform:none} .mm-vote-card.is-picked{transform:translateY(-4px) scale(1.01)} }
+
+.mm-badge{position:absolute;top:10px;left:10px;z-index:3;padding:5px 11px;border-radius:999px;border:2px solid var(--ink);background:#fff;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:12px;letter-spacing:.06em;white-space:nowrap;animation:popSoft .25s both}
+
+@keyframes mmSlideIn{from{transform:translateY(36px) rotate(-2deg) scale(.94);opacity:0}to{transform:none;opacity:1}}
+@keyframes mmFlip{0%{transform:perspective(600px) rotateX(90deg);opacity:0}100%{transform:none;opacity:1}}
+@keyframes mmGlow{0%,100%{box-shadow:0 0 0 0 rgba(255,200,61,0),0 5px 0 var(--ink)}50%{box-shadow:0 0 0 9px rgba(255,200,61,.65),0 5px 0 var(--ink)}}
+.mm-winner .mm-meme{animation:mmGlow 1.6s ease-in-out infinite}
+.mm-meme video{display:block;width:100%;height:100%;object-fit:cover;pointer-events:none}
+.mm-header{padding:12px 76px 12px 20px}
+@media (min-width:1240px){ .mm-header{padding:12px 20px} }

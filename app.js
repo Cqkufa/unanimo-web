@@ -1,6 +1,7 @@
 import { supabase } from './supabaseClient.js';
 import { pickWords } from './words.js';
 import { DIBUJALO_BANK, pickDibujaloTrio, dibujaloFunnyLine, TUTTI_CATEGORIES, pickLetter, pickImpostorPair } from './wordbank.js';
+import { installMakeItMeme, mmDefaultConfig } from './makeitmeme.js';
 
 /* ---------- utils ---------- */
 const INK='#1D1B2F', CORAL='#FF6B4A', MINT='#2ED3A6', YEL='#FFC83D', VIOLET='#9B85FF', BLUE='#5CB8FF', PINK='#FF8CC2';
@@ -131,6 +132,7 @@ const GAMES = [
   {id:'dibujalo', name:'Dibujalo', tagline:'Uno dibuja, el resto adivina en tiempo real contrarreloj.', letters:['D','I'], colors:[BLUE,YEL], min:3, max:10, isNew:true},
   {id:'tuttifrutti', name:'Tutti Frutti', tagline:'Una letra, varias categorías y un solo grito: ¡STOP!', letters:['T','F'], colors:[MINT,PINK], min:2, max:8, isNew:true},
   {id:'impostor', name:'Impostor', tagline:'Todos comparten una palabra. Uno miente. Descubrilo antes de que sea tarde.', letters:['I','M'], colors:[VIOLET,PINK], min:4, max:12, isNew:true},
+  {id:'makeitmeme', name:'Make It Meme', tagline:'Una imagen, mil chistes. Ponele el texto más gracioso y votá el mejor meme.', letters:['M','E'], colors:[YEL,CORAL], min:3, max:12, isNew:true},
 ];
 // Modo Ronda isn't a game itself — it's a meta-mode that chains a sequence
 // of the games above into one match with a shared, accumulating score. It
@@ -156,6 +158,7 @@ const RONDA_ADAPTERS = {
   dibujalo: { startGame:'dStartGame', totals:'dTotals', defaultConfig:(n)=>({rounds:Math.max(1,n||1), chooseTime:10, drawTime:60, hints:true, categories:Object.keys(DIBUJALO_BANK)}) },
   tuttifrutti: { startGame:'tfStartGame', totals:'tfTotals', defaultConfig:()=>({rounds:1, time:60, categories:['nombre','animal','pais','comida','objeto','pelicula'], hard:false}) },
   impostor: { startGame:'impStartGame', totals:'impTotals', defaultConfig:()=>({rounds:1, impostorCount:'auto', clueTime:30, discussTime:60, voteTime:20, mode:'classic'}) },
+  makeitmeme: { startGame:'mmStartGame', totals:'mmTotals', defaultConfig:()=>({...mmDefaultConfig(), rounds:2}) },
 };
 // Same formulas each config screen uses for its own live estimate, applied
 // to the default settings — shown on the picker card before anyone's
@@ -165,6 +168,7 @@ function gameEstimateMinutes(gameId){
   if(gameId==='dibujalo') return Math.max(1,Math.round(6*(60+10+15)/60));
   if(gameId==='tuttifrutti') return Math.max(1,Math.round(5*(60+40)/60));
   if(gameId==='impostor') return Math.max(1,Math.round(5*(6*30+60+20+30)/60));
+  if(gameId==='makeitmeme') return Math.max(1,Math.round(5*(60+30+25)/60));
   if(gameId==='ronda') return 12;
   return 5;
 }
@@ -212,6 +216,7 @@ class Game {
     this.dDraft = { rounds:6, chooseTime:10, drawTime:60, hints:true, categories:Object.keys(DIBUJALO_BANK) };
     this.tfDraft = { rounds:5, time:60, categories:['nombre','animal','pais','comida','objeto','pelicula'], hard:false };
     this.impDraft = { rounds:5, impostorCount:'auto', clueTime:30, discussTime:60, voteTime:20, mode:'classic' };
+    this.mmDraft = mmDefaultConfig();
     const allGameIds = Object.keys(RONDA_ADAPTERS);
     this.rondaDraft = { selectedGames:[...allGameIds], orderMode:'custom', customOrder:[...allGameIds], noRepeat:true, rounds:4 };
     this.state = null; // host-authoritative shared state, once in a room
@@ -225,7 +230,7 @@ class Game {
 
   /* ---------- lifecycle helpers ---------- */
   later(fn, ms){ const t=setTimeout(fn, ms); this.timers.push(t); return t; }
-  clearTimers(){ this.timers.forEach(clearTimeout); this.timers=[]; clearInterval(this.tick); clearInterval(this.revealTick); clearInterval(this.hostWatch); clearInterval(this.dWatch); clearInterval(this.tfWatch); clearInterval(this.impWatch); }
+  clearTimers(){ this.timers.forEach(clearTimeout); this.timers=[]; clearInterval(this.tick); clearInterval(this.revealTick); clearInterval(this.hostWatch); clearInterval(this.dWatch); clearInterval(this.tfWatch); clearInterval(this.impWatch); clearInterval(this.mmWatch); }
 
   /* ---------- sound ---------- */
   playClick(){ if(!this.soundOn) return; beep(760, 0.05, 'sine', 0.05); }
@@ -385,6 +390,9 @@ class Game {
     // (like Dibujalo's word options) so it never sits in the shared,
     // broadcast-to-everyone game state.
     this.channel.on('broadcast', {event:'impWord'}, ({payload})=>{ if(payload.to===this.myId) this.impReceiveWord(payload); });
+    // Make It Meme: during voting, memes are anonymous — each author is told
+    // privately which entry is theirs (so their own can be greyed out).
+    this.channel.on('broadcast', {event:'mmOwn'}, ({payload})=>{ if(payload.to===this.myId) this.mmReceiveOwn(payload); });
     await new Promise(resolve=>{
       this.channel.subscribe(status=>{ if(status==='SUBSCRIBED') resolve(); });
     });
@@ -576,6 +584,10 @@ class Game {
       if(this.state.gameId!=='impostor' || !this.state.g) return;
       this.impSubmitGuess(msg.id, msg.text);
     }
+    else if(msg.type === 'mmSubmit' || msg.type === 'mmDraft' || msg.type === 'mmVote' || msg.type === 'mmSync'){
+      if(this.state.gameId!=='makeitmeme' || !this.state.g) return;
+      this.mmOnAction(msg);
+    }
   }
 
   checkAllDone(){
@@ -608,6 +620,10 @@ class Game {
     }
 
     this.state = s;
+    // Rough host-clock offset (host's Date.now() minus ours), so timers that
+    // count down to a host-set deadline line up even if a phone's clock is
+    // off by a few seconds. Used by Make It Meme's timers.
+    if(!isSelf && s.updatedAt) this.hostClockOffset = s.updatedAt - Date.now();
     if(this.local.joining){ this.local.joining=false; this.saveSession(); this.toast('Te uniste a la partida', PALETTE[0]); }
 
     const forced = s.stage !== this.local.appliedStage;
@@ -678,6 +694,7 @@ class Game {
       if(s.phase === 'impGuess'){
         this.local.impGuessDraft = '';
       }
+      if(typeof s.phase === 'string' && s.phase.startsWith('mm')) this.mmOnStage(s);
       this.renderScreen();
       return;
     }
@@ -705,6 +722,7 @@ class Game {
     else if(this.local.screen === 'impWord'){ if(!this.local.impIntro && this.local.impReadyConfirmed) this.renderScreen(); }
     else if(this.local.screen === 'impVote') this.renderScreen();
     else if(this.local.screen === 'impGuess') this.renderScreen();
+    else if(typeof this.local.screen === 'string' && this.local.screen.startsWith('mm')) this.mmOnSameStage();
   }
 
   /* ---------- round flow (host drives global stage) ---------- */
@@ -1532,6 +1550,7 @@ class Game {
       else if(t.dataset.role === 'd-guess-input'){ this.local.dGuessDraft = t.value.slice(0,40); }
       else if(t.dataset.role === 'imp-clue-input'){ this.local.impClueDraft = t.value.slice(0,40); }
       else if(t.dataset.role === 'imp-guess-input'){ this.local.impGuessDraft = t.value.slice(0,40); }
+      else if(t.dataset.role === 'mm-top' || t.dataset.role === 'mm-bottom'){ this.mmOnInput(t); }
     });
     document.body.addEventListener('keydown', e=>{
       const t = e.target;
@@ -1555,6 +1574,8 @@ class Game {
       if(t.dataset.role === 'd-guess-input' && e.key==='Enter'){ e.preventDefault(); this.dSendGuess(); }
       if(t.dataset.role === 'imp-clue-input' && e.key==='Enter'){ e.preventDefault(); this.impSendClue(); }
       if(t.dataset.role === 'imp-guess-input' && e.key==='Enter'){ e.preventDefault(); this.impSendGuess(); }
+      if(t.dataset.role === 'mm-top' && e.key==='Enter'){ e.preventDefault(); const next=this.root.querySelector('[data-role="mm-bottom"]'); if(next) next.focus(); }
+      if(t.dataset.role === 'mm-bottom' && e.key==='Enter'){ e.preventDefault(); this.mmSubmit(false); }
     });
   }
   patchWordMeta(){
@@ -1610,6 +1631,7 @@ class Game {
         else if(this.state.gameId==='dibujalo') this.dStartGame();
         else if(this.state.gameId==='tuttifrutti') this.tfStartGame();
         else if(this.state.gameId==='impostor') this.impStartGame();
+        else if(this.state.gameId==='makeitmeme') this.mmStartGame();
       },
       copyCode: ()=>{ try{ navigator.clipboard.writeText(this.state.code); }catch(e){} this.toast('Código copiado', MINT); },
       addBot: ()=>this.addBot(),
@@ -1729,7 +1751,7 @@ class Game {
         // every player gets taken to the ranking screen together, instead of
         // only the host navigating locally while guests wait on reveal forever.
         if(!this.isHost || !this.state) return;
-        const map = {unanimo:'ranking', tuttifrutti:'tfRanking', dibujalo:'dRanking', impostor:'impRanking'};
+        const map = {unanimo:'ranking', tuttifrutti:'tfRanking', dibujalo:'dRanking', impostor:'impRanking', makeitmeme:'mmRanking'};
         const phase = map[this.state.gameId]; if(!phase) return;
         this.state.phase = phase;
         this.state.stage = (this.state.stage||0) + 1;
@@ -1741,12 +1763,14 @@ class Game {
         else if(this.state.gameId==='dibujalo') this.dNext();
         else if(this.state.gameId==='tuttifrutti') this.tfNext();
         else if(this.state.gameId==='impostor') this.impNext();
+        else if(this.state.gameId==='makeitmeme') this.mmNext();
       },
       playAgain: ()=>{
         if(this.state.gameId==='unanimo') this.uPlayAgain();
         else if(this.state.gameId==='dibujalo') this.dPlayAgain();
         else if(this.state.gameId==='tuttifrutti') this.tfPlayAgain();
         else if(this.state.gameId==='impostor') this.impPlayAgain();
+        else if(this.state.gameId==='makeitmeme') this.mmPlayAgain();
       },
       avatarPrev: (t)=>{ const k=t.dataset.trait, n=Number(t.dataset.count); this.local.avatar[k] = ((this.local.avatar[k]||0)-1+n)%n; this.refreshAvatarUI(); },
       avatarNext: (t)=>{ const k=t.dataset.trait, n=Number(t.dataset.count); this.local.avatar[k] = ((this.local.avatar[k]||0)+1)%n; this.refreshAvatarUI(); },
@@ -1755,6 +1779,7 @@ class Game {
       sendChat: ()=>this.sendChat(),
       ...(this.dibujaloActions ? this.dibujaloActions() : {}),
       ...(this.tfActions ? this.tfActions() : {}),
+      ...this.mmActions(),
     };
   }
 
@@ -1793,6 +1818,11 @@ class Game {
     else if(sc==='rondaIntro') html = this.viewRondaIntro();
     else if(sc==='rondaResults') html = this.viewRondaResults();
     else if(sc==='rondaFinal') html = this.viewRondaFinal();
+    else if(sc==='mmWrite') html = this.viewMmWrite();
+    else if(sc==='mmVote') html = this.viewMmVote();
+    else if(sc==='mmResults') html = this.viewMmResults();
+    else if(sc==='mmRanking') html = this.viewMmRanking();
+    else if(sc==='mmFinal') html = this.viewMmFinal();
     else html = this.viewHome();
 
     this.root.innerHTML = html;
@@ -1834,6 +1864,7 @@ class Game {
       const left = this.state ? Math.max(0, Math.round((this.state.g.voteEndAt - Date.now())/1000)) : 0;
       this.impPatchTimer('vote', left);
     }
+    if(sc==='mmWrite' || sc==='mmVote') this.mmAfterRender();
   }
 
   // Modal container is separate from the screen container so opening/closing
@@ -1987,6 +2018,7 @@ class Game {
       if(this.local.hostFlow==='dibujalo') return this.viewDibujaloConfig ? this.viewDibujaloConfig() : this.viewComingSoonConfig('dibujalo');
       if(this.local.hostFlow==='tuttifrutti') return this.viewTfConfig ? this.viewTfConfig() : this.viewComingSoonConfig('tuttifrutti');
       if(this.local.hostFlow==='impostor') return this.viewImpostorConfig ? this.viewImpostorConfig() : this.viewComingSoonConfig('impostor');
+      if(this.local.hostFlow==='makeitmeme') return this.viewMmConfig();
       if(this.local.hostFlow==='ronda') return this.viewRondaConfig();
     }
     const hostId = s.hostId;
@@ -2087,6 +2119,7 @@ class Game {
     else if(gameId==='dibujalo') items = [cfg.rounds+(cfg.rounds===1?' ronda':' rondas'), cfg.chooseTime+'s para elegir', cfg.drawTime+'s para dibujar'];
     else if(gameId==='tuttifrutti') items = [cfg.rounds+(cfg.rounds===1?' ronda':' rondas'), cfg.categories.length+' categorías', cfg.time+'s por ronda'];
     else if(gameId==='impostor') items = [cfg.rounds+(cfg.rounds===1?' ronda':' rondas'), (cfg.impostorCount==='auto'?'Infiltrados automático':cfg.impostorCount+(cfg.impostorCount===1?' infiltrado':' infiltrados')), cfg.mode==='pure'?'Modo puro':'Modo clásico'];
+    else if(gameId==='makeitmeme') items = [cfg.rounds+(cfg.rounds===1?' ronda':' rondas'), cfg.writeTime+'s para crear', cfg.voteTime+'s para votar', ...(cfg.hostScreen?['Pantalla principal']:[])];
     return items.map(t=>`<div style="padding:8px 14px;border-radius:999px;background:#fff;border:2px solid var(--line);font-size:14px;font-weight:700">${esc(t)}</div>`).join('');
   }
 
@@ -4266,6 +4299,10 @@ class Game {
     </div>`;
   }
 }
+
+// Make It Meme lives in its own module (makeitmeme.js) and plugs its
+// methods into Game here, reusing the same shared UI helpers.
+installMakeItMeme(Game, { INK, CORAL, MINT, YEL, VIOLET, BLUE, PINK, CONF_COLORS, BOT_NAMES, avatarSVG, esc, mmss, beep, gameMeta, gameEstimateMinutes });
 
 const app = document.getElementById('app');
 const toastRoot = document.getElementById('toasts');
