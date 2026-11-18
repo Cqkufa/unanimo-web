@@ -172,18 +172,8 @@ a:hover{color:var(--coral)}
 @media (min-width:900px){ .mm-stage{grid-template-columns:minmax(0,1.5fr) minmax(300px,1fr)} }
 
 .mm-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:18px;align-items:start}
-@media (min-width:900px){ .mm-grid-big{grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:24px} }
 .mm-results{row-gap:26px;padding-top:6px}
 .mm-hall{grid-template-columns:repeat(auto-fill,minmax(180px,1fr))}
-
-.mm-vote-card{position:relative;display:block;width:100%;padding:0;border:0;background:none;text-align:left;transition:transform .18s cubic-bezier(.3,1.5,.5,1),opacity .2s}
-.mm-vote-card .mm-meme{transition:box-shadow .18s}
-.mm-vote-card:not(:disabled):hover{transform:translateY(-4px)}
-.mm-vote-card.is-picked{transform:translateY(-4px) scale(1.01)}
-.mm-vote-card.is-picked .mm-meme{box-shadow:0 0 0 5px var(--mint),0 8px 0 var(--ink)}
-.mm-vote-card.is-dim{opacity:.45}
-.mm-vote-card:disabled{cursor:default}
-@media (hover:none){ .mm-vote-card:not(:disabled):hover{transform:none} .mm-vote-card.is-picked{transform:translateY(-4px) scale(1.01)} }
 
 .mm-badge{position:absolute;top:10px;left:10px;z-index:3;padding:5px 11px;border-radius:999px;border:2px solid var(--ink);background:#fff;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:12px;letter-spacing:.06em;white-space:nowrap;animation:popSoft .25s both}
 
@@ -194,3 +184,17 @@ a:hover{color:var(--coral)}
 .mm-meme video{display:block;width:100%;height:100%;object-fit:cover;pointer-events:none}
 .mm-header{padding:12px 76px 12px 20px}
 @media (min-width:1240px){ .mm-header{padding:12px 20px} }
+
+/* reaction buttons (one meme at a time) */
+.mm-react-row{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.mm-react{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;height:96px;border-radius:20px;border:2.5px solid var(--ink);background:#fff;box-shadow:0 5px 0 var(--ink);transition:transform .12s,box-shadow .12s,background .15s,opacity .2s}
+.mm-react-emoji{font-size:40px;line-height:1}
+.mm-react-label{font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:14px;letter-spacing:.02em}
+.mm-react:not(:disabled):hover{transform:translateY(-3px);box-shadow:0 8px 0 var(--ink)}
+.mm-react:not(:disabled):active{transform:translateY(4px);box-shadow:0 1px 0 var(--ink)}
+.mm-react.is-on{background:var(--mint)}
+.mm-react.is-off{opacity:.4}
+.mm-react:disabled{cursor:default}
+@keyframes mmBurst{0%{transform:scale(1)}35%{transform:scale(1.14) rotate(-4deg)}70%{transform:scale(.97)}100%{transform:scale(1)}}
+.mm-react.mm-burst{animation:mmBurst .45s cubic-bezier(.3,1.6,.5,1)}
+@media (hover:none){ .mm-react:not(:disabled):hover{transform:none;box-shadow:0 5px 0 var(--ink)} }

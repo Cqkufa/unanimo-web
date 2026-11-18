@@ -4,19 +4,29 @@
 // installMakeItMeme() — the same way every other game's methods live on
 // Game — but its code lives here so it doesn't grow app.js.
 //
+// How a round plays:
+//   1. mmWrite  — every player gets THEIR OWN template and writes a caption.
+//   2. mmVote   — memes are shown one at a time, anonymous. Everybody except
+//                 the author reacts 😂 / 😐 / 🤮. Next meme when everybody
+//                 reacted or the per-meme timer runs out.
+//   3. mmResults — memes ranked by reaction score; authors revealed; the top
+//                 three places earn points (5/3/1 by default).
+//
 // The file has two parts:
-//   1. Pure game logic (no DOM, no network): caption cleanup, vote tally,
+//   1. Pure game logic (no DOM, no network): caption cleanup, reaction
 //      scoring, totals and end-of-match stats. Easy to test on its own.
 //   2. The integration: host-authoritative round flow + screens.
 //
 // Security model (same as Impostor/Dibujalo): the host is the authority.
-//  - While writing, captions live ONLY in host memory (this.mmSecret). The
-//    shared state only says WHO already sent (a boolean per player).
+//  - Which template each player got and every caption live ONLY in host
+//    memory (this.mmSecret) while writing. Each player is sent their own
+//    template privately (event mmTpl). Shared state only says WHO already sent.
 //  - While voting, memes are broadcast anonymously, shuffled, under random
 //    ids. Each author is told privately which one is theirs (event mmOwn).
-//  - Votes are tallied host-side (this.mmVotes). The host rejects double
-//    votes, self votes, votes for unknown memes and votes outside the
-//    voting phase. Only "who already voted" is public until results.
+//  - Reactions are tallied host-side (this.mmReacts). The host rejects
+//    reactions to your own meme, to a meme that isn't on screen, repeated
+//    reactions and unknown emojis. Only "how many reacted" is public until
+//    the results.
 //  - Phase changes and deadlines are set by the host; every client counts
 //    down to the same absolute deadline (corrected by the host clock offset).
 
@@ -24,16 +34,26 @@ import { MEME_CATEGORIES, memeTemplate, memeCategoryCounts, pickMemeTemplate, ME
 
 /* ===================== 1. PURE LOGIC ===================== */
 
-// Points for 1st, 2nd and 3rd place by votes received. Copied into each
-// game's config when it starts, so changing it here rebalances new games.
+// Points for 1st, 2nd and 3rd place. Copied into each game's config when it
+// starts, so changing it here rebalances new games.
 export const MM_POINTS = [5,3,1];
+// Reactions and what each one adds to a meme's score. Someone who doesn't
+// react to a meme counts as the neutral one, so every meme is judged by the
+// same number of people.
+export const MM_REACTIONS = [
+  { id:'lol', emoji:'😂', label:'Gracioso', value:2 },
+  { id:'meh', emoji:'😐', label:'Meh',      value:1 },
+  { id:'bad', emoji:'🤮', label:'Malo',     value:0 },
+];
+const MM_NEUTRAL = 'meh';
 export const MM_CAPTION_MAX = 70;
 const MM_INTRO_MS = 2600;       // "Ronda N" intro before typing starts
 const MM_WRITE_GRACE_MS = 2500; // wait for late submits after the deadline
-const MM_VOTE_GRACE_MS = 1200;
+const MM_REACT_GRACE_MS = 700;
+const MM_NEXT_DELAY_MS = 1100;  // pause after everyone reacted, before the next meme
 
 export function mmDefaultConfig(){
-  return { rounds:5, writeTime:60, voteTime:30, categories:Object.keys(MEME_CATEGORIES), hostScreen:false, points:[...MM_POINTS] };
+  return { rounds:5, writeTime:60, reactTime:10, categories:Object.keys(MEME_CATEGORIES), hostScreen:false, points:[...MM_POINTS] };
 }
 
 export function mmCleanCaption(s){
@@ -46,19 +66,28 @@ export function mmShuffle(arr){
   return a;
 }
 
-// Scores one round. entries: [{mid,pid,top,bottom}], votes: {voterId: mid}.
-// Ranking by votes uses "competition" places: tied memes share the place
-// (two memes tied for 1st both get 1st-place points, the next one is 3rd).
-// A meme with 0 votes never scores.
-export function mmScoreRound(entries, votes, points){
-  const tally = {};
-  entries.forEach(e=>{ tally[e.mid] = 0; });
-  Object.values(votes || {}).forEach(mid=>{ if(tally[mid] != null) tally[mid]++; });
-  const rows = entries.map(e=>({ mid:e.mid, pid:e.pid, top:e.top, bottom:e.bottom, votes:tally[e.mid] }));
-  rows.sort((a,b)=> b.votes - a.votes);
+// Scores one round.
+//  entries:   [{mid, pid, tpl, top, bottom}]
+//  reactions: {mid: {voterId: 'lol'|'meh'|'bad'}}
+//  judges:    {mid: [voterIds who could react to it]} — missing ones count as neutral
+// Memes are ranked by score (ties broken by number of 😂). Places are
+// "competition" style: tied memes share the place (two tied for 1st both get
+// 1st-place points, the next one is 3rd). A meme with score 0 never scores.
+export function mmScoreRound(entries, reactions, judges, points){
+  const value = Object.fromEntries(MM_REACTIONS.map(r=>[r.id, r.value]));
+  const rows = entries.map(e=>{
+    const got = (reactions && reactions[e.mid]) || {};
+    const who = (judges && judges[e.mid]) || Object.keys(got);
+    const counts = { lol:0, meh:0, bad:0 };
+    who.forEach(v=>{ const r = got[v] && value[got[v]]!=null ? got[v] : MM_NEUTRAL; counts[r]++; });
+    const score = counts.lol*value.lol + counts.meh*value.meh + counts.bad*value.bad;
+    return { mid:e.mid, pid:e.pid, tpl:e.tpl, top:e.top, bottom:e.bottom, counts, judges:who.length, score };
+  });
+  const better = (a,b)=> a.score>b.score || (a.score===b.score && a.counts.lol>b.counts.lol);
+  rows.sort((a,b)=> b.score-a.score || b.counts.lol-a.counts.lol);
   rows.forEach(r=>{
-    if(r.votes <= 0){ r.place = null; r.points = 0; return; }
-    r.place = 1 + rows.filter(o=>o.votes > r.votes).length;
+    if(r.score <= 0){ r.place = null; r.points = 0; return; }
+    r.place = 1 + rows.filter(o=>better(o,r)).length;
     r.points = (points || MM_POINTS)[r.place-1] || 0;
   });
   return rows;
@@ -78,32 +107,34 @@ export function mmTotalsFrom(results, playerIds, uptoRound){
 // them into cards. Pure: works from the shared state only.
 export function mmFinalStats(g, playerIds){
   const has = id => playerIds.includes(id);
-  const wins = {}, votesTotal = {}, goodEye = {}, zeroes = {}, speedSum = {}, speedN = {};
+  const wins = {}, lolGiven = {}, badGiven = {}, badGot = {}, speedSum = {}, speedN = {};
   let best = null, unanimous = null;
   (g.results || []).forEach((res, r)=>{
     if(!res) return;
-    const winners = res.entries.filter(e=>e.place === 1);
-    winners.forEach(e=>{ wins[e.pid] = (wins[e.pid]||0) + 1; });
     res.entries.forEach(e=>{
-      votesTotal[e.pid] = (votesTotal[e.pid]||0) + e.votes;
-      if(e.votes === 0) zeroes[e.pid] = (zeroes[e.pid]||0) + 1;
-      if(!best || e.votes > best.votes) best = { ...e, round:r, templateId:g.templateId[r] };
+      if(e.place === 1) wins[e.pid] = (wins[e.pid]||0) + 1;
+      badGot[e.pid] = (badGot[e.pid]||0) + e.counts.bad;
+      if(!best || e.score > best.score || (e.score===best.score && e.counts.lol > best.counts.lol)) best = { ...e, round:r };
+      if(e.judges >= 2 && e.counts.lol === e.judges && (!unanimous || e.judges > unanimous.n)) unanimous = { pid:e.pid, n:e.judges, round:r };
     });
-    const winnerMids = new Set(winners.map(e=>e.mid));
-    Object.entries(res.votes || {}).forEach(([voter, mid])=>{ if(winnerMids.has(mid)) goodEye[voter] = (goodEye[voter]||0) + 1; });
-    const voters = Object.keys(res.votes || {}).length;
-    if(winners.length === 1 && voters >= 2 && winners[0].votes === voters && (!unanimous || voters > unanimous.n)) unanimous = { pid:winners[0].pid, n:voters, round:r };
+    Object.values(res.reactions || {}).forEach(byVoter=>{
+      Object.entries(byVoter).forEach(([voter, rx])=>{
+        if(rx==='lol') lolGiven[voter] = (lolGiven[voter]||0) + 1;
+        if(rx==='bad') badGiven[voter] = (badGiven[voter]||0) + 1;
+      });
+    });
     Object.entries((g.submitMs && g.submitMs[r]) || {}).forEach(([pid, ms])=>{ speedSum[pid] = (speedSum[pid]||0) + ms; speedN[pid] = (speedN[pid]||0) + 1; });
   });
   const top = obj => { const e = Object.entries(obj).filter(([id,v])=>has(id) && v>0).sort((a,b)=>b[1]-a[1])[0]; return e ? { pid:e[0], n:e[1] } : null; };
   const fastest = Object.keys(speedSum).filter(has).map(pid=>({ pid, n:Math.round(speedSum[pid]/speedN[pid]/1000) })).sort((a,b)=>a.n-b.n)[0] || null;
   return [
-    best && best.votes > 0 && has(best.pid) && { key:'best', pid:best.pid, n:best.votes, extra:best },
+    best && best.score > 0 && has(best.pid) && { key:'best', pid:best.pid, n:best.counts.lol, extra:best },
     top(wins) && { key:'wins', ...top(wins) },
     unanimous && has(unanimous.pid) && { key:'unanimous', ...unanimous },
-    top(goodEye) && { key:'eye', ...top(goodEye) },
+    top(lolGiven) && { key:'easy', ...top(lolGiven) },
+    top(badGiven) && { key:'critic', ...top(badGiven) },
     fastest && { key:'fast', ...fastest },
-    top(zeroes) && { key:'misunderstood', ...top(zeroes) },
+    top(badGot) && { key:'vomit', ...top(badGot) },
   ].filter(Boolean);
 }
 
@@ -120,12 +151,13 @@ export function mmCaptionSize(text){
 /* ===================== 2. INTEGRATION ===================== */
 
 export function installMakeItMeme(Game, ui){
-  const { INK, CORAL, MINT, YEL, VIOLET, BLUE, PINK, CONF_COLORS, avatarSVG, esc, mmss, beep, gameEstimateMinutes } = ui;
+  const { INK, CORAL, MINT, YEL, VIOLET, BLUE, PINK, avatarSVG, esc, mmss, beep } = ui;
+  const RX = Object.fromEntries(MM_REACTIONS.map(r=>[r.id, r]));
 
   // ---------- small view helpers ----------
   const memeHtml = (templateId, top, bottom, opts={})=>{
     const tpl = memeTemplate(templateId);
-    if(!tpl) return `<div class="mm-meme" style="aspect-ratio:1/1;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800">Plantilla no encontrada</div>`;
+    if(!tpl) return `<div class="mm-meme" style="aspect-ratio:1/1;display:flex;align-items:center;justify-content:center"><div class="spinner" style="border-color:rgba(255,255,255,.3);border-top-color:#fff"></div></div>`;
     const maxH = opts.maxVh ? `max-width:min(100%, calc(${opts.maxVh}vh * ${(tpl.w/tpl.h).toFixed(4)}));margin:0 auto;` : '';
     return `<div class="mm-meme" style="aspect-ratio:${tpl.w}/${tpl.h};${maxH}${opts.style||''}">
       ${tpl.video
@@ -137,6 +169,7 @@ export function installMakeItMeme(Game, ui){
   };
   const optBtn = (action, val, label, on)=>`<button data-action="${action}" data-val="${val}" style="height:48px;border-radius:14px;border:2px solid ${INK};background:${on?INK:'#fff'};color:${on?'var(--cream)':INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:16px">${label}</button>`;
   const waitHost = (s, self, verb)=>`<div style="height:54px;border-radius:16px;border:2px solid ${INK};background:#fff;display:flex;align-items:center;justify-content:center;gap:10px;font-weight:800;font-size:15px;color:var(--muted)">${esc(self.playerById(s.hostId)?.name||'El anfitrión')} ${verb||'va a continuar'}<span style="display:flex;gap:3px"><span style="animation:blink 1.2s infinite">•</span><span style="animation:blink 1.2s .2s infinite">•</span><span style="animation:blink 1.2s .4s infinite">•</span></span></div>`;
+  const rxChips = (counts)=> MM_REACTIONS.map(r=>`<span style="display:inline-flex;align-items:center;gap:3px;font-weight:800;font-size:13px;opacity:${counts[r.id]?1:.4}">${r.emoji}<span>${counts[r.id]}</span></span>`).join('');
   const timerBar = (total)=>`
     <div data-el="mmTimerBox" style="display:flex;align-items:center;gap:8px;height:46px;padding:0 14px;border-radius:999px;border:2px solid ${INK};background:#fff;box-shadow:0 3px 0 ${INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:22px;font-variant-numeric:tabular-nums">
       <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="${INK}" stroke-width="2.4" stroke-linecap="round"><circle cx="12" cy="13" r="8"></circle><path d="M12 9v4l2.5 2.5M9 2h6"></path></svg>
@@ -146,7 +179,7 @@ export function installMakeItMeme(Game, ui){
     <div style="position:sticky;top:0;z-index:10;background:var(--cream)">
       <div class="mm-header" style="max-width:1080px;margin:0 auto;display:flex;align-items:center;gap:12px">
         <button class="icon-btn" data-action="askLeave" aria-label="Salir"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="${INK}" stroke-width="2.6" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
-        <div style="flex:1;min-width:0;display:flex;align-items:baseline;gap:6px;font-family:'Bricolage Grotesque',sans-serif;font-weight:800"><span style="font-size:20px">RONDA ${s.g.round+1}</span><span style="font-size:14px;color:var(--muted)">de ${s.gameConfig.rounds}</span>${extra||''}</div>
+        <div style="flex:1;min-width:0;display:flex;align-items:baseline;gap:6px;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;white-space:nowrap"><span style="font-size:20px">RONDA ${s.g.round+1}</span><span style="font-size:14px;color:var(--muted)">de ${s.gameConfig.rounds}</span>${extra||''}</div>
         ${total!=null?timerBar(total):''}
       </div>
       ${total!=null?`<div style="height:6px;background:var(--line)"><div data-el="mmTimerBar" style="height:100%;width:100%;background:${INK};transition:width .5s linear,background .3s"></div></div>`:''}
@@ -156,19 +189,22 @@ export function installMakeItMeme(Game, ui){
 
     /* ---------- shared helpers ---------- */
     mmNow(){ return Date.now() + (this.isHost ? 0 : (this.hostClockOffset||0)); },
-    mmL(){ if(!this.local.mm) this.local.mm = { round:-1, top:'', bottom:'', sentRound:-1, ownMid:null, ownRound:-1, pick:null, votedMid:null, votedRound:-1, intro:false, countdown:null, revealStep:0, revealRound:-1 }; return this.local.mm; },
+    mmL(){ if(!this.local.mm) this.local.mm = { round:-1, top:'', bottom:'', sentRound:-1, tpl:null, tplRound:-1, ownMid:null, ownRound:-1, rxKey:null, rx:null, intro:false, countdown:null, revealStep:0, revealRound:-1 }; return this.local.mm; },
     mmParticipants(r){ const g=this.state.g; return ((g.participants&&g.participants[r])||[]).filter(id=>this.playerById(id)); },
     mmAmParticipant(){ const g=this.state&&this.state.g; return !!(g && (g.participants[g.round]||[]).includes(this.myId)); },
     mmHasSent(){ const g=this.state.g, L=this.mmL(); return L.sentRound===g.round || !!(g.submitted[g.round]&&g.submitted[g.round][this.myId]); },
-    mmHasVoted(){ const g=this.state.g, L=this.mmL(); return L.votedRound===g.round || !!(g.voted[g.round]&&g.voted[g.round][this.myId]); },
+    mmMyTpl(){ const L=this.mmL(); return L.tplRound===this.state.g.round ? L.tpl : null; },
+    mmCurrent(){ const g=this.state.g; return (g.entries[g.round]||[])[g.showIndex] || null; },
+    mmIsMine(mid){ const L=this.mmL(); return L.ownRound===this.state.g.round && L.ownMid===mid; },
+    mmMyReaction(){ const g=this.state.g, cur=this.mmCurrent(), L=this.mmL(); if(!cur) return null; return L.rxKey===g.round+':'+cur.mid ? L.rx : null; },
     // Players that compete (the host's TV screen, if used, doesn't).
     mmRankedPlayers(){
       const s = this.state, cfg = s.gameConfig || {};
       return this.players().filter(p=>!(cfg.hostScreen && p.id===s.hostId));
     },
     mmFreshG(){
-      return { round:-1, usedTemplates:[], templateId:[], participants:[], writeStartAt:0, writeEndAt:0, voteEndAt:0,
-        submitted:[], submitMs:[], entries:[], voted:[], results:[] };
+      return { round:-1, usedTemplates:[], participants:[], writeStartAt:0, writeEndAt:0,
+        submitted:[], submitMs:[], entries:[], showIndex:0, showEndAt:0, reacted:[], results:[] };
     },
 
     /* ---------- config (host, from the lobby) ---------- */
@@ -193,22 +229,27 @@ export function installMakeItMeme(Game, ui){
     mmStartRound(r){
       if(!this.isHost) return;
       const s = this.state, g = s.g, cfg = s.gameConfig;
-      const tplId = pickMemeTemplate(g.usedTemplates, cfg.categories);
       const participants = this.players().filter(p=>!(cfg.hostScreen && p.id===s.hostId)).map(p=>p.id);
-      this.mmSecret = { round:r, captions:{}, pidOf:{}, midOf:{} };
-      this.mmVotes = {};
+      // one different template per player, never repeated within the match
+      const tplOf = {};
+      let used = g.usedTemplates.slice();
+      participants.forEach(pid=>{ const id = pickMemeTemplate(used, cfg.categories); tplOf[pid] = id; used.push(id); });
+      this.mmSecret = { round:r, tplOf, captions:{}, pidOf:{}, midOf:{} };
+      this.mmReacts = {};
       this.mmDrafts = {};
       g.round = r;
-      g.usedTemplates = [...g.usedTemplates, tplId];
-      g.templateId[r] = tplId;
+      g.usedTemplates = used;
       g.participants[r] = participants;
       g.submitted[r] = {};
       g.submitMs[r] = {};
       g.entries[r] = null;
-      g.voted[r] = {};
+      g.reacted[r] = {};
       g.results[r] = null;
+      g.showIndex = 0;
       g.writeStartAt = Date.now() + MM_INTRO_MS;
       g.writeEndAt = g.writeStartAt + cfg.writeTime*1000;
+      // each player's template goes out privately, before the phase change
+      participants.forEach(pid=>this.mmSendTpl(pid));
       s.phase = 'mmWrite';
       s.stage = (s.stage||0) + 1;
       this.broadcastState();
@@ -234,6 +275,13 @@ export function installMakeItMeme(Game, ui){
         }
       }, 400);
     },
+    mmSendTpl(pid){
+      if(!this.isHost || !this.mmSecret) return;
+      const tpl = this.mmSecret.tplOf[pid]; if(!tpl) return;
+      const payload = { round:this.mmSecret.round, tpl };
+      if(pid===this.myId) this.mmReceiveTpl(payload);
+      else if(!this.playerById(pid)?.isBot) this.send('mmTpl', { to:pid, ...payload });
+    },
     // Host-only validation of a submitted meme.
     mmHostSubmit(pid, top, bottom){
       if(!this.isHost) return false;
@@ -251,7 +299,7 @@ export function installMakeItMeme(Game, ui){
     },
     mmStartVote(){
       if(!this.isHost) return;
-      const s = this.state, g = s.g, r = g.round, cfg = s.gameConfig;
+      const s = this.state, g = s.g, r = g.round;
       if(s.phase!=='mmWrite') return;
       clearInterval(this.mmWatch);
       const present = this.mmParticipants(r);
@@ -267,42 +315,58 @@ export function installMakeItMeme(Game, ui){
       const entries = authors.map((pid,i)=>{
         const mid = 'm'+i+Math.random().toString(36).slice(2,6);
         this.mmSecret.pidOf[mid] = pid; this.mmSecret.midOf[pid] = mid;
-        return { mid, ...this.mmSecret.captions[pid] };
+        return { mid, tpl:this.mmSecret.tplOf[pid], ...this.mmSecret.captions[pid] };
       });
       g.entries[r] = entries;
-      g.voted[r] = {};
-      this.mmVotes = {};
-      const eligible = this.mmEligibleVoters(r);
-      if(!entries.length || !eligible.length){ this.mmStartResults(true); return; }
-      g.voteEndAt = Date.now() + cfg.voteTime*1000;
+      g.reacted[r] = {};
+      this.mmReacts = {};
+      if(!entries.length){ this.mmStartResults(true); return; }
+      authors.forEach(pid=>this.mmSendOwn(pid));
       s.phase = 'mmVote';
+      this.mmShowMeme(0);
+    },
+    // Puts meme #i on everyone's screen and arms its timer.
+    mmShowMeme(i){
+      if(!this.isHost) return;
+      const s = this.state, g = s.g, r = g.round, cfg = s.gameConfig;
+      const entry = g.entries[r][i];
+      g.showIndex = i;
+      g.showEndAt = Date.now() + cfg.reactTime*1000;
+      g.reacted[r][entry.mid] = {};
       s.stage = (s.stage||0) + 1;
       this.broadcastState();
-      // tell each author (privately) which anonymous meme is theirs
-      authors.forEach(pid=>this.mmSendOwn(pid));
-      eligible.forEach(pid=>{
+      // bots react at a random moment
+      this.mmJudges(entry.mid).forEach(pid=>{
         const p = this.playerById(pid); if(!p || !p.isBot) return;
-        const total = cfg.voteTime*1000;
         this.later(()=>{
-          if(!this.isHost || this.state.phase!=='mmVote' || this.state.g.round!==r) return;
-          const options = entries.filter(e=>this.mmSecret.pidOf[e.mid]!==pid);
-          if(options.length) this.mmHostVote(pid, options[Math.floor(Math.random()*options.length)].mid);
-        }, total*0.2 + Math.random()*total*0.5);
+          if(!this.isHost || this.state.phase!=='mmVote' || this.state.g.round!==r || this.state.g.showIndex!==i) return;
+          const roll = Math.random();
+          this.mmHostReact(pid, entry.mid, roll<0.5 ? 'lol' : roll<0.82 ? 'meh' : 'bad');
+        }, 1200 + Math.random()*cfg.reactTime*600);
       });
+      clearInterval(this.mmWatch);
+      let advancing = false;
       this.mmWatch = setInterval(()=>{
-        if(!this.isHost || this.state.phase!=='mmVote' || this.state.g.round!==r){ clearInterval(this.mmWatch); return; }
-        const el = this.mmEligibleVoters(r);
-        const allIn = el.every(id=>this.mmVotes[id]);
-        if(allIn || Date.now() >= this.state.g.voteEndAt + MM_VOTE_GRACE_MS){
+        const st = this.state;
+        if(!this.isHost || st.phase!=='mmVote' || st.g.round!==r || st.g.showIndex!==i){ clearInterval(this.mmWatch); return; }
+        if(advancing) return;
+        const judges = this.mmJudges(entry.mid);
+        const allIn = judges.every(id=>this.mmReacts[entry.mid] && this.mmReacts[entry.mid][id]);
+        if(allIn || Date.now() >= st.g.showEndAt + MM_REACT_GRACE_MS){
+          advancing = true;
           clearInterval(this.mmWatch);
-          this.later(()=>this.mmStartResults(), allIn ? 800 : 0);
+          this.later(()=>{
+            if(this.state.phase!=='mmVote' || this.state.g.round!==r || this.state.g.showIndex!==i) return;
+            if(i+1 < this.state.g.entries[r].length) this.mmShowMeme(i+1);
+            else this.mmStartResults();
+          }, allIn ? MM_NEXT_DELAY_MS : 300);
         }
-      }, 400);
+      }, 300);
     },
-    // A participant can vote if there's at least one meme that isn't theirs.
-    mmEligibleVoters(r){
-      const entries = this.state.g.entries[r] || [];
-      return this.mmParticipants(r).filter(pid=>entries.some(e=>this.mmSecret.pidOf[e.mid]!==pid));
+    // Who can react to a meme: every present participant except its author.
+    mmJudges(mid){
+      const r = this.state.g.round, author = this.mmSecret && this.mmSecret.pidOf[mid];
+      return this.mmParticipants(r).filter(id=>id!==author);
     },
     mmSendOwn(pid){
       if(!this.isHost || !this.mmSecret) return;
@@ -311,17 +375,20 @@ export function installMakeItMeme(Game, ui){
       if(pid===this.myId) this.mmReceiveOwn(payload);
       else if(!this.playerById(pid)?.isBot) this.send('mmOwn', { to:pid, ...payload });
     },
-    // Host-only validation of a vote. Returns a reason string when rejected.
-    mmHostVote(voterId, mid){
+    // Host-only validation of a reaction. Returns a reason string when rejected.
+    mmHostReact(voterId, mid, rx){
       if(!this.isHost) return 'no-host';
       const s = this.state, g = s.g, r = g.round;
       if(s.phase!=='mmVote') return 'phase';
+      if(!RX[rx]) return 'emoji';
+      const cur = (g.entries[r]||[])[g.showIndex];
+      if(!cur || cur.mid!==mid) return 'not-on-screen';
       if(!(g.participants[r]||[]).includes(voterId)) return 'not-player';
-      if(this.mmVotes[voterId]) return 'already';
-      if(!(g.entries[r]||[]).some(e=>e.mid===mid)) return 'unknown';
       if(this.mmSecret.pidOf[mid]===voterId) return 'own';
-      this.mmVotes[voterId] = mid;
-      g.voted[r][voterId] = true;
+      this.mmReacts[mid] = this.mmReacts[mid] || {};
+      if(this.mmReacts[mid][voterId]) return 'already';
+      this.mmReacts[mid][voterId] = rx;
+      g.reacted[r][mid] = { ...(g.reacted[r][mid]||{}), [voterId]:true };
       this.broadcastState();
       return null;
     },
@@ -331,8 +398,9 @@ export function installMakeItMeme(Game, ui){
       if(s.phase!=='mmVote' && !(skipVote && s.phase==='mmWrite')) return;
       clearInterval(this.mmWatch);
       const entries = (g.entries[r]||[]).map(e=>({ ...e, pid:this.mmSecret.pidOf[e.mid] }));
-      const rows = mmScoreRound(entries, this.mmVotes, s.gameConfig.points);
-      g.results[r] = { entries:rows, votes:{ ...this.mmVotes } };
+      const judges = {}; entries.forEach(e=>{ judges[e.mid] = (g.participants[r]||[]).filter(id=>id!==e.pid && (this.playerById(id) || (this.mmReacts[e.mid]||{})[id])); });
+      const rows = mmScoreRound(entries, this.mmReacts, judges, s.gameConfig.points);
+      g.results[r] = { entries:rows, reactions:JSON.parse(JSON.stringify(this.mmReacts||{})) };
       s.phase = 'mmResults';
       s.stage = (s.stage||0) + 1;
       this.broadcastState();
@@ -349,7 +417,7 @@ export function installMakeItMeme(Game, ui){
     mmPlayAgain(){
       if(!this.isHost) return;
       clearInterval(this.mmWatch);
-      this.mmSecret = null; this.mmVotes = null; this.mmDrafts = null;
+      this.mmSecret = null; this.mmReacts = null; this.mmDrafts = null;
       this.state.g = this.mmFreshG();
       this.state.phase = 'lobby';
       this.state.stage = (this.state.stage||0) + 1;
@@ -366,15 +434,23 @@ export function installMakeItMeme(Game, ui){
         this.mmDrafts = this.mmDrafts || {};
         this.mmDrafts[msg.id] = { top:mmCleanCaption(msg.top), bottom:mmCleanCaption(msg.bottom) };
       }
-      else if(msg.type==='mmVote') this.mmHostVote(msg.id, msg.mid);
-      else if(msg.type==='mmSync') this.mmSendOwn(msg.id); // reconnected author asks again which meme is theirs
+      else if(msg.type==='mmReact') this.mmHostReact(msg.id, msg.mid, msg.rx);
+      // reconnected player asks again for their private info
+      else if(msg.type==='mmSync'){ if(this.state.phase==='mmWrite') this.mmSendTpl(msg.id); else this.mmSendOwn(msg.id); }
     },
 
     /* ---------- every client: local actions ---------- */
+    mmReceiveTpl(payload){
+      const L = this.mmL();
+      L.tpl = payload.tpl; L.tplRound = payload.round;
+      const tpl = memeTemplate(payload.tpl);
+      if(tpl){ const im = new Image(); im.src = tpl.poster || tpl.src; }
+      if(this.local.screen==='mmWrite' && this.state && this.state.g.round===payload.round) this.renderScreen();
+    },
     mmReceiveOwn(payload){
       const L = this.mmL();
       L.ownMid = payload.mid; L.ownRound = payload.round;
-      if(this.local.screen==='mmVote') this.mmPatchVoteUI();
+      if(this.local.screen==='mmVote') this.renderScreen();
     },
     mmOnInput(t){
       const L = this.mmL();
@@ -407,24 +483,17 @@ export function installMakeItMeme(Game, ui){
       if(!auto) this.toast('¡Meme enviado!', MINT);
       this.renderScreen();
     },
-    mmPick(mid){
-      if(!this.state || this.state.phase!=='mmVote' || !this.mmAmParticipant() || this.mmHasVoted()) return;
+    mmReact(rx){
+      if(!this.state || this.state.phase!=='mmVote' || !this.mmAmParticipant()) return;
+      const cur = this.mmCurrent(); if(!cur || !RX[rx]) return;
+      if(this.mmIsMine(cur.mid)) return;
+      if(this.mmMyReaction()) return;
       const L = this.mmL();
-      if(L.ownRound===this.state.g.round && L.ownMid===mid){ this.toast('No podés votar tu propio meme', CORAL); return; }
-      L.pick = L.pick===mid ? null : mid;
-      this.mmPatchVoteUI();
-    },
-    mmConfirmVote(){
-      if(!this.state || this.state.phase!=='mmVote' || this.mmHasVoted()) return;
-      const L = this.mmL();
-      if(!L.pick) return;
-      L.votedMid = L.pick; L.votedRound = this.state.g.round;
-      if(this.isHost){
-        const err = this.mmHostVote(this.myId, L.pick);
-        if(err){ L.votedRound = -1; L.votedMid = null; if(err==='own') this.toast('No podés votar tu propio meme', CORAL); }
-      } else this.sendAction('mmVote', { id:this.myId, round:this.state.g.round, mid:L.pick });
-      if(this.soundOn){ beep(660,.08,'triangle',.08); beep(990,.12,'triangle',.08,.08); }
-      this.mmPatchVoteUI();
+      L.rxKey = this.state.g.round+':'+cur.mid; L.rx = rx;
+      if(this.isHost){ const err = this.mmHostReact(this.myId, cur.mid, rx); if(err && err!=='already'){ L.rxKey = null; L.rx = null; } }
+      else this.sendAction('mmReact', { id:this.myId, round:this.state.g.round, mid:cur.mid, rx });
+      if(this.soundOn){ const f = rx==='lol'?880:rx==='meh'?560:300; beep(f,.09,'triangle',.08); beep(f*1.25,.12,'triangle',.07,.08); }
+      this.mmPatchReactUI(true);
     },
 
     /* ---------- every client: stage changes ---------- */
@@ -432,9 +501,7 @@ export function installMakeItMeme(Game, ui){
       const L = this.mmL(), g = s.g;
       clearInterval(this.tick);
       if(s.phase==='mmWrite'){
-        if(L.round!==g.round){ L.round = g.round; L.top=''; L.bottom=''; L.pick=null; L.ownMid=null; }
-        const tpl = memeTemplate(g.templateId[g.round]);
-        if(tpl){ const im = new Image(); im.src = tpl.poster || tpl.src; }
+        if(L.round!==g.round){ L.round = g.round; L.top=''; L.bottom=''; L.rxKey=null; L.rx=null; }
         const introLeft = g.writeStartAt - this.mmNow();
         L.intro = introLeft > 250;
         L.countdown = null;
@@ -447,12 +514,16 @@ export function installMakeItMeme(Game, ui){
           this.later(()=>{ if(this.local.screen==='mmWrite'){ L.intro=false; L.countdown=null; this.renderScreen(); } }, introLeft);
         }
         this.mmStartLocalTimer('write');
+        // reconnected / slow: ask the host again for our template
+        if(!this.isHost && g.participants[g.round] && g.participants[g.round].includes(this.myId)){
+          this.later(()=>{ if(this.state && this.state.phase==='mmWrite' && L.tplRound!==this.state.g.round) this.sendAction('mmSync', { id:this.myId, round:this.state.g.round }); }, 1500);
+        }
       }
       else if(s.phase==='mmVote'){
-        L.pick = null;
         this.mmStartLocalTimer('vote');
-        // reconnected / late author: ask the host again which meme is ours
-        if(!this.isHost && this.mmAmParticipant() && g.submitted[g.round] && g.submitted[g.round][this.myId]){
+        const e = (g.entries[g.round]||[])[g.showIndex+1];
+        const t = e && memeTemplate(e.tpl); if(t){ const im = new Image(); im.src = t.poster || t.src; } // preload next
+        if(!this.isHost && g.showIndex===0 && g.submitted[g.round] && g.submitted[g.round][this.myId]){
           this.later(()=>{ if(this.state && this.state.phase==='mmVote' && L.ownRound!==this.state.g.round) this.sendAction('mmSync', { id:this.myId, round:this.state.g.round }); }, 1500);
         }
       }
@@ -484,7 +555,7 @@ export function installMakeItMeme(Game, ui){
       if(!this.soundOn) return;
       [523,659,784,1046].forEach((f,i)=>beep(f, .16, 'triangle', .09, i*.12));
     },
-    // Same stage, new state (someone sent/voted/left): patch in place so
+    // Same stage, new state (someone sent/reacted/left): patch in place so
     // nobody loses focus or scroll position mid-typing.
     mmOnSameStage(){
       if(this.local.screen==='mmWrite'){
@@ -494,17 +565,17 @@ export function installMakeItMeme(Game, ui){
         if(this.state.g.submitted[r]?.[this.myId] && this.root.querySelector('[data-role="mm-top"]')) this.renderScreen();
         else this.mmPatchStatus();
       }
-      else if(this.local.screen==='mmVote') this.mmPatchVoteUI();
+      else if(this.local.screen==='mmVote') this.mmPatchReactUI(false);
     },
     mmAfterRender(){
       const sc = this.local.screen;
       if(sc==='mmWrite'){
         this.mmTickTimer('write');
-        if(this.mmAmParticipant() && !this.mmHasSent() && !this.mmL().intro){
+        if(this.mmAmParticipant() && !this.mmHasSent() && !this.mmL().intro && this.mmMyTpl()){
           this.later(()=>{ const el=this.root.querySelector('[data-role="mm-top"]'); if(el && document.activeElement!==el && !this.root.querySelector('[data-role="mm-bottom"]:focus')) el.focus({preventScroll:true}); }, 60);
         }
       }
-      if(sc==='mmVote'){ this.mmTickTimer('vote'); this.mmPatchVoteUI(); }
+      if(sc==='mmVote'){ this.mmTickTimer('vote'); this.mmPatchReactUI(false); }
     },
     mmStartLocalTimer(kind){
       clearInterval(this.tick);
@@ -516,19 +587,20 @@ export function installMakeItMeme(Game, ui){
           this.mmSubmit(true); // time's up: send whatever is typed
         }
         if(left<=0) clearInterval(this.tick);
-      }, 500);
+      }, kind==='vote' ? 250 : 500);
     },
     mmTickTimer(kind){
       const g = this.state.g, cfg = this.state.gameConfig;
-      const endAt = kind==='write' ? g.writeEndAt : g.voteEndAt;
-      const total = kind==='write' ? cfg.writeTime : cfg.voteTime;
+      const endAt = kind==='write' ? g.writeEndAt : g.showEndAt;
+      const total = kind==='write' ? cfg.writeTime : cfg.reactTime;
       const left = Math.max(0, Math.min(total, Math.ceil((endAt - this.mmNow())/1000)));
       const textEl = this.root.querySelector('[data-el="mmTimerText"]');
       const barEl = this.root.querySelector('[data-el="mmTimerBar"]');
       const boxEl = this.root.querySelector('[data-el="mmTimerBox"]');
+      const urgent = kind==='write' ? left<=10 : left<=3;
       if(textEl) textEl.textContent = mmss(left);
-      if(barEl){ barEl.style.width = (left/total*100)+'%'; barEl.style.background = left<=10 ? CORAL : INK; }
-      if(boxEl){ boxEl.style.background = left<=10 ? CORAL : '#fff'; boxEl.style.animation = left<=10 && left>0 ? 'tick 1s ease-in-out infinite' : 'none'; }
+      if(barEl){ barEl.style.width = (left/total*100)+'%'; barEl.style.background = urgent ? CORAL : INK; }
+      if(boxEl){ boxEl.style.background = urgent ? CORAL : '#fff'; boxEl.style.animation = urgent && left>0 ? 'tick 1s ease-in-out infinite' : 'none'; }
       return left;
     },
     mmPatchStatus(){
@@ -553,43 +625,24 @@ export function installMakeItMeme(Game, ui){
         </div>`;
       }).join('');
     },
-    mmPatchVoteUI(){
+    // Reaction buttons + "N/M reaccionaron" — patched in place on every state.
+    mmPatchReactUI(justReacted){
       if(!this.state || this.local.screen!=='mmVote') return;
-      const g = this.state.g, r = g.round, L = this.mmL();
-      const voted = this.mmHasVoted();
-      const myVote = L.votedRound===r ? L.votedMid : null;
-      const canVote = this.mmAmParticipant() && !voted;
-      this.root.querySelectorAll('[data-mid]').forEach(btn=>{
-        const mid = btn.dataset.mid;
-        const own = L.ownRound===r && L.ownMid===mid;
-        const picked = voted ? myVote===mid : L.pick===mid;
-        btn.classList.toggle('is-picked', !!picked);
-        btn.classList.toggle('is-dim', (voted && !picked) || own);
-        btn.disabled = !canVote || own;
-        const badge = btn.querySelector('[data-el="mmBadge"]');
-        if(badge){
-          badge.style.display = own||picked ? 'block' : 'none';
-          badge.textContent = own ? 'TU MEME' : (voted ? 'TU VOTO ✓' : 'ELEGIDO');
-          badge.style.background = own ? YEL : MINT;
-        }
+      const g = this.state.g, r = g.round, cur = this.mmCurrent(); if(!cur) return;
+      const mine = this.mmMyReaction();
+      const judgesN = Math.max(0, this.mmParticipants(r).length - 1);
+      const done = Object.keys((g.reacted[r]||{})[cur.mid]||{}).length;
+      const cnt = this.root.querySelector('[data-el="mmReactCount"]');
+      if(cnt) cnt.textContent = `${Math.min(done,judgesN)} / ${judgesN} reaccionaron`;
+      this.root.querySelectorAll('[data-action="mmReact"]').forEach(btn=>{
+        const on = mine===btn.dataset.rx;
+        btn.classList.toggle('is-on', on);
+        btn.classList.toggle('is-off', !!mine && !on);
+        btn.disabled = !!mine;
+        if(on && justReacted){ btn.classList.remove('mm-burst'); void btn.offsetWidth; btn.classList.add('mm-burst'); }
       });
-      const total = this.mmEligibleCount(), done = Object.keys(g.voted[r]||{}).length;
-      const cnt = this.root.querySelector('[data-el="mmVoteCount"]');
-      if(cnt) cnt.textContent = `${done} / ${total} votaron`;
-      const bar = this.root.querySelector('[data-el="mmVoteBar"]');
-      if(bar){
-        if(!this.mmAmParticipant()) bar.innerHTML = `<div style="text-align:center;font-size:14px;font-weight:700;color:var(--muted)">Los jugadores están votando desde sus celulares.</div>`;
-        else if(voted) bar.innerHTML = `<div style="height:56px;border-radius:16px;border:2px solid ${INK};background:${MINT};display:flex;align-items:center;justify-content:center;gap:8px;font-weight:800;font-size:16px;animation:popSoft .3s both">¡Voto registrado! Esperando al resto…</div>`;
-        else bar.innerHTML = `<button class="btn-primary" data-action="mmConfirmVote" ${L.pick?'':'disabled'}>${L.pick?'VOTAR ESTE MEME':'TOCÁ EL MEME MÁS GRACIOSO'}</button>`;
-      }
-    },
-    // Eligible voters as seen by any client: participants who have at least
-    // one meme that isn't theirs. Clients don't know authorship, so this
-    // counts everyone except a sole author when there's only one meme.
-    mmEligibleCount(){
-      const g = this.state.g, r = g.round, n = (g.entries[r]||[]).length;
-      const parts = this.mmParticipants(r).length;
-      return n===1 ? Math.max(0, parts-1) : parts;
+      const hint = this.root.querySelector('[data-el="mmReactHint"]');
+      if(hint) hint.textContent = mine ? `Votaste ${RX[mine].emoji} ${RX[mine].label} · esperando al resto…` : '¿Qué te pareció?';
     },
 
     /* ---------- actions (wired into Game.actions) ---------- */
@@ -597,7 +650,7 @@ export function installMakeItMeme(Game, ui){
       return {
         mmSetRounds: (t)=>{ this.mmDraft.rounds = Number(t.dataset.val); this.renderScreen(); },
         mmSetWriteTime: (t)=>{ this.mmDraft.writeTime = Number(t.dataset.val); this.renderScreen(); },
-        mmSetVoteTime: (t)=>{ this.mmDraft.voteTime = Number(t.dataset.val); this.renderScreen(); },
+        mmSetReactTime: (t)=>{ this.mmDraft.reactTime = Number(t.dataset.val); this.renderScreen(); },
         mmToggleCategory: (t)=>{
           const id = t.dataset.cat, c = this.mmDraft.categories, i = c.indexOf(id);
           if(i>=0){ if(c.length<=1){ this.toast('Dejá al menos una categoría', CORAL); return; } c.splice(i,1); } else c.push(id);
@@ -606,8 +659,7 @@ export function installMakeItMeme(Game, ui){
         mmToggleHostScreen: ()=>{ this.mmDraft.hostScreen = !this.mmDraft.hostScreen; this.renderScreen(); },
         mmConfirmConfig: ()=>this.mmConfirmConfig(),
         mmSubmitNow: ()=>this.mmSubmit(false),
-        mmPick: (t)=>this.mmPick(t.dataset.mid),
-        mmConfirmVote: ()=>this.mmConfirmVote(),
+        mmReact: (t)=>this.mmReact(t.dataset.rx),
         mmRevealAll: ()=>{ const L=this.mmL(), res=this.state.g.results[this.state.g.round]; const n = res?res.entries.length:0; if(L.revealStep<n){ L.revealStep = n; this.renderScreen(); this.mmCelebrate(); } },
       };
     },
@@ -618,7 +670,7 @@ export function installMakeItMeme(Game, ui){
       const counts = memeCategoryCounts();
       const rounds = [3,5,7,10].map(n=>optBtn('mmSetRounds', n, n, d.rounds===n)).join('');
       const writes = [45,60,90].map(n=>optBtn('mmSetWriteTime', n, n+'s', d.writeTime===n)).join('');
-      const votes = [20,30,45].map(n=>optBtn('mmSetVoteTime', n, n+'s', d.voteTime===n)).join('');
+      const reacts = [6,10,15].map(n=>optBtn('mmSetReactTime', n, n+'s', d.reactTime===n)).join('');
       const cats = Object.entries(MEME_CATEGORIES).map(([id,c])=>{
         const on = d.categories.includes(id);
         return `<button data-action="mmToggleCategory" data-cat="${id}" style="display:flex;align-items:center;gap:8px;padding:10px 14px;border-radius:14px;border:2px solid ${INK};background:${on?MINT:'#fff'}">
@@ -627,7 +679,8 @@ export function installMakeItMeme(Game, ui){
       }).join('');
       const pts = (d.points||MM_POINTS);
       const pl = this.players().length, need = d.hostScreen ? 3 : 2;
-      const estimate = '≈ '+Math.max(1,Math.round(d.rounds*(d.writeTime+d.voteTime+25)/60))+' min de juego';
+      const n = Math.max(3, pl - (d.hostScreen?1:0));
+      const estimate = '≈ '+Math.max(1,Math.round(d.rounds*(d.writeTime + n*(d.reactTime*0.7) + 25)/60))+' min de juego';
       return `<div class="screen screen-narrow" style="padding-top:28px;padding-bottom:28px">
         <div class="top-bar"><button class="icon-btn" data-action="backToPicker" aria-label="Volver">${this.iconBack()}</button><div class="heading" style="font-size:28px">Make It Meme</div></div>
         <div style="flex:1;display:flex;flex-direction:column;justify-content:center;gap:22px;padding:16px 0">
@@ -641,11 +694,11 @@ export function installMakeItMeme(Game, ui){
               <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">${writes}</div>
             </div>
             <div style="display:flex;flex-direction:column;gap:10px;padding:14px 0;border-bottom:2px solid var(--panel-line)">
-              <div style="font-weight:800;font-size:17px">Tiempo para votar</div>
-              <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">${votes}</div>
+              <div style="display:flex;flex-direction:column;gap:2px"><div style="font-weight:800;font-size:17px">Tiempo para reaccionar</div><div style="font-size:14px;color:var(--muted)">Por cada meme, que se muestran de a uno</div></div>
+              <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">${reacts}</div>
             </div>
             <div style="display:flex;flex-direction:column;gap:10px;padding:14px 0;border-bottom:2px solid var(--panel-line)">
-              <div style="font-weight:800;font-size:17px">Categorías de plantillas</div>
+              <div style="display:flex;flex-direction:column;gap:2px"><div style="font-weight:800;font-size:17px">Categorías de plantillas</div><div style="font-size:14px;color:var(--muted)">Cada jugador recibe una plantilla distinta</div></div>
               <div style="display:flex;flex-wrap:wrap;gap:8px">${cats}</div>
             </div>
             <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 0">
@@ -653,8 +706,9 @@ export function installMakeItMeme(Game, ui){
               <button data-action="mmToggleHostScreen" aria-label="Pantalla principal" style="width:56px;height:32px;border-radius:999px;border:2px solid ${INK};background:${d.hostScreen?MINT:'#F1E7D8'};position:relative;flex:0 0 auto"><span style="position:absolute;top:2px;left:${d.hostScreen?'26px':'2px'};width:24px;height:24px;border-radius:50%;background:#fff;border:2px solid ${INK};transition:left .15s"></span></button>
             </div>
           </div>
-          <div style="display:flex;justify-content:center;gap:8px;flex-wrap:wrap">
-            ${pts.map((p,i)=>`<div style="padding:8px 14px;border-radius:999px;background:${[YEL,'#E4DEF5','#F6BE9E'][i]||'#fff'};border:2px solid ${INK};font-size:14px;font-weight:800">${i+1}º puesto · ${p} pts</div>`).join('')}
+          <div style="display:flex;flex-direction:column;align-items:center;gap:8px">
+            <div style="display:flex;justify-content:center;gap:8px;flex-wrap:wrap">${MM_REACTIONS.map(r=>`<div style="padding:8px 14px;border-radius:999px;background:#fff;border:2px solid var(--line);font-size:14px;font-weight:800">${r.emoji} ${esc(r.label)} · +${r.value}</div>`).join('')}</div>
+            <div style="display:flex;justify-content:center;gap:8px;flex-wrap:wrap">${pts.map((p,i)=>`<div style="padding:8px 14px;border-radius:999px;background:${[YEL,'#E4DEF5','#F6BE9E'][i]||'#fff'};border:2px solid ${INK};font-size:14px;font-weight:800">${i+1}º puesto · ${p} pts</div>`).join('')}</div>
           </div>
           <div style="display:flex;flex-direction:column;gap:14px">
             <div style="text-align:center;font-size:14px;font-weight:700;color:var(--muted)">${estimate}${d.hostScreen && pl<need?' · con pantalla principal se necesitan 2 jugadores además de vos':''}</div>
@@ -666,32 +720,41 @@ export function installMakeItMeme(Game, ui){
 
     viewMmWrite(){
       const s = this.state, g = s.g, r = g.round, cfg = s.gameConfig, L = this.mmL();
-      const tplId = g.templateId[r];
+      const isPlayer = this.mmAmParticipant();
+      const tplId = isPlayer ? this.mmMyTpl() : null;
       if(L.intro){
         return `<div style="min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;text-align:center;padding:20px;overflow:hidden">
           <div style="font-size:15px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)">RONDA ${r+1} DE ${cfg.rounds}</div>
           <div class="heading" style="font-size:clamp(30px,8vw,46px);animation:pop .5s cubic-bezier(.3,1.6,.5,1) both">¡A MEMEAR!</div>
-          <div data-el="mmIntroMeme" style="width:min(78vw,360px);animation:mmSlideIn .7s cubic-bezier(.3,1.4,.5,1) .15s both;filter:blur(12px);transition:filter .5s">${memeHtml(tplId,'','',{maxVh:40})}</div>
-          <div data-el="mmCount" style="height:96px;display:flex;align-items:center;justify-content:center;font-weight:800;color:var(--muted)">Preparando la plantilla…</div>
+          ${isPlayer
+            ? `<div data-el="mmIntroMeme" style="width:min(78vw,360px);animation:mmSlideIn .7s cubic-bezier(.3,1.4,.5,1) .15s both;filter:blur(12px);transition:filter .5s">${memeHtml(tplId,'','',{maxVh:40})}</div>`
+            : `<div style="font-size:16px;font-weight:700;color:var(--muted);max-width:360px">Cada jugador va a recibir su propia plantilla.</div>`}
+          <div data-el="mmCount" style="height:96px;display:flex;align-items:center;justify-content:center;font-weight:800;color:var(--muted)">${isPlayer?'Esta es tu plantilla…':'Preparados…'}</div>
         </div>`;
       }
-      const isPlayer = this.mmAmParticipant();
       const sent = isPlayer && this.mmHasSent();
       const statusCard = `<div class="card" style="padding:14px 16px;display:flex;flex-direction:column;gap:10px">
           <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px"><div style="font-size:12px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)">Memes enviados</div><div data-el="mmWaiting" style="font-size:13px;font-weight:700;color:var(--muted);text-align:right">${esc(this.mmWaitingText())}</div></div>
           <div data-el="mmStatus" style="display:flex;flex-wrap:wrap;gap:8px">${this.mmStatusHtml()}</div>
         </div>`;
-      let side;
       if(!isPlayer){
-        side = `<div style="display:flex;flex-direction:column;gap:14px">
-          <div class="card" style="padding:18px;text-align:center;display:flex;flex-direction:column;gap:6px">
-            <div class="heading" style="font-size:24px">Están creando sus memes</div>
-            <div style="font-size:15px;font-weight:600;color:var(--muted)">Cada uno escribe desde su celular. Cuando todos envíen (o se termine el tiempo) arranca la votación.</div>
-          </div>${statusCard}</div>`;
-      } else if(sent){
+        return `<div style="min-height:100vh;display:flex;flex-direction:column">
+          ${header(s, cfg.writeTime)}
+          <div style="flex:1;width:100%;max-width:720px;margin:0 auto;padding:28px 20px;display:flex;flex-direction:column;gap:16px;justify-content:center">
+            <div style="text-align:center;display:flex;flex-direction:column;gap:8px;align-items:center">
+              <div style="font-size:56px;line-height:1;animation:pop .5s both">✍️</div>
+              <div class="heading" style="font-size:clamp(26px,5vw,40px)">Están creando sus memes</div>
+              <div style="font-size:16px;font-weight:600;color:var(--muted);max-width:460px">Cada uno recibió su propia plantilla y escribe desde su celular. Cuando todos envíen (o se termine el tiempo) arranca la votación.</div>
+            </div>
+            ${statusCard}
+          </div>
+        </div>`;
+      }
+      let side;
+      if(sent){
         side = `<div style="display:flex;flex-direction:column;gap:14px">
           <div style="background:${MINT};border:2.5px solid ${INK};border-radius:24px;box-shadow:0 5px 0 ${INK};padding:18px;display:flex;align-items:center;gap:14px;animation:pop .45s cubic-bezier(.3,1.6,.5,1) both">
-            <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="${INK}" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M7 12.5l3.5 3.5L17 9"></path></svg>
+            <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="${INK}" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" style="flex:0 0 auto"><circle cx="12" cy="12" r="10"></circle><path d="M7 12.5l3.5 3.5L17 9"></path></svg>
             <div><div class="heading" style="font-size:22px">¡MEME ENVIADO!</div><div style="font-size:14px;font-weight:700">Ya no se puede editar. Ahora a esperar…</div></div>
           </div>${statusCard}</div>`;
       } else {
@@ -700,27 +763,25 @@ export function installMakeItMeme(Game, ui){
           <div class="card" style="padding:16px;display:flex;flex-direction:column;gap:12px">
             <div style="font-size:12px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)">Escribí tu meme</div>
             <label style="position:relative;display:block">
-              <input class="mm-input" data-role="mm-top" value="${esc(L.top)}" placeholder="Texto de arriba" maxlength="${MM_CAPTION_MAX}" autocomplete="off" enterkeyhint="next">
+              <input class="mm-input" data-role="mm-top" value="${esc(L.top)}" placeholder="Texto de arriba" maxlength="${MM_CAPTION_MAX}" autocomplete="off" enterkeyhint="next" ${tplId?'':'disabled'}>
               <span data-el="mm-top-count" style="position:absolute;right:14px;top:50%;transform:translateY(-50%);font-size:12px;font-weight:800;color:var(--muted)">${MM_CAPTION_MAX-L.top.length}</span>
             </label>
             <label style="position:relative;display:block">
-              <input class="mm-input" data-role="mm-bottom" value="${esc(L.bottom)}" placeholder="Texto de abajo" maxlength="${MM_CAPTION_MAX}" autocomplete="off" enterkeyhint="send">
+              <input class="mm-input" data-role="mm-bottom" value="${esc(L.bottom)}" placeholder="Texto de abajo" maxlength="${MM_CAPTION_MAX}" autocomplete="off" enterkeyhint="send" ${tplId?'':'disabled'}>
               <span data-el="mm-bottom-count" style="position:absolute;right:14px;top:50%;transform:translateY(-50%);font-size:12px;font-weight:800;color:var(--muted)">${MM_CAPTION_MAX-L.bottom.length}</span>
             </label>
             <div style="font-size:13px;font-weight:600;color:var(--muted)">Podés usar uno solo de los dos. Se envía solo cuando termina el tiempo.</div>
             <button class="btn-primary" data-el="mmSendBtn" data-action="mmSubmitNow" ${can?'':'disabled'}>ENVIAR MEME</button>
           </div>${statusCard}</div>`;
       }
-      const preview = isPlayer && !sent
-        ? memeHtml(tplId, L.top, L.bottom, { live:true, maxVh:46 })
-        : memeHtml(tplId, sent?L.top:'', sent?L.bottom:'', { maxVh: isPlayer?46:70 });
+      const preview = sent ? memeHtml(tplId, L.top, L.bottom, { maxVh:46 }) : memeHtml(tplId, L.top, L.bottom, { live:true, maxVh:46 });
       return `<div style="min-height:100vh;display:flex;flex-direction:column">
         ${header(s, cfg.writeTime)}
         <div style="flex:1;width:100%;max-width:1080px;margin:0 auto;padding:18px 20px 28px">
           <div class="mm-stage">
             <div style="display:flex;flex-direction:column;gap:10px;animation:popSoft .35s both">
               ${preview}
-              ${isPlayer && !sent ? `<div style="text-align:center;font-size:13px;font-weight:700;color:var(--muted)">Vista previa en vivo · todos tienen la misma imagen</div>` : ''}
+              ${!sent ? `<div style="text-align:center;font-size:13px;font-weight:700;color:var(--muted)">${tplId?'Tu plantilla · vista previa en vivo':'Cargando tu plantilla…'}</div>` : ''}
             </div>
             ${side}
           </div>
@@ -730,43 +791,53 @@ export function installMakeItMeme(Game, ui){
 
     viewMmVote(){
       const s = this.state, g = s.g, r = g.round, cfg = s.gameConfig;
-      const tplId = g.templateId[r];
       const entries = g.entries[r] || [];
+      const cur = this.mmCurrent();
+      if(!cur) return `<div style="min-height:100vh;display:flex;align-items:center;justify-content:center"><div class="spinner"></div></div>`;
       const isPlayer = this.mmAmParticipant();
-      const cards = entries.map((e,i)=>`
-        <button class="mm-vote-card" data-action="mmPick" data-mid="${e.mid}" style="animation:mmSlideIn .5s cubic-bezier(.3,1.4,.5,1) both;animation-delay:${(i*0.08).toFixed(2)}s" ${isPlayer?'':'disabled'}>
-          <div data-el="mmBadge" class="mm-badge" style="display:none"></div>
-          ${memeHtml(tplId, e.top, e.bottom)}
-        </button>`).join('');
+      const mine = this.mmIsMine(cur.mid);
+      const dots = entries.map((e,i)=>`<div style="width:${i===g.showIndex?'28px':'10px'};height:10px;border-radius:999px;background:${i<g.showIndex?INK:i===g.showIndex?CORAL:'#fff'};border:2px solid ${INK}"></div>`).join('');
+      let controls;
+      if(!isPlayer){
+        controls = `<div style="text-align:center;font-size:15px;font-weight:700;color:var(--muted)">Reaccionan desde el celular: ${MM_REACTIONS.map(x=>x.emoji).join(' ')}</div>`;
+      } else if(mine){
+        controls = `<div style="padding:16px;border-radius:20px;background:${YEL};border:2.5px solid ${INK};box-shadow:0 4px 0 ${INK};text-align:center;animation:pop .4s both">
+          <div class="heading" style="font-size:20px">🤫 ¡Es tu meme!</div>
+          <div style="font-size:14px;font-weight:700">No podés votarlo. Disimulá…</div>
+        </div>`;
+      } else {
+        controls = `<div style="display:flex;flex-direction:column;gap:10px">
+          <div data-el="mmReactHint" style="text-align:center;font-size:14px;font-weight:800;color:var(--muted)">¿Qué te pareció?</div>
+          <div class="mm-react-row">${MM_REACTIONS.map(x=>`<button class="mm-react" data-action="mmReact" data-rx="${x.id}" aria-label="${esc(x.label)}"><span class="mm-react-emoji">${x.emoji}</span><span class="mm-react-label">${esc(x.label)}</span></button>`).join('')}</div>
+        </div>`;
+      }
       return `<div style="min-height:100vh;display:flex;flex-direction:column">
-        ${header(s, cfg.voteTime)}
-        <div style="flex:1;width:100%;max-width:1080px;margin:0 auto;padding:18px 20px 0;display:flex;flex-direction:column;gap:16px">
-          <div style="display:flex;flex-direction:column;align-items:center;gap:4px;text-align:center">
-            <div class="heading" style="font-size:clamp(26px,6.5vw,38px);letter-spacing:-.02em;animation:pop .5s cubic-bezier(.3,1.6,.5,1) both">VOTÁ EL MÁS GRACIOSO</div>
-            <div style="font-size:14px;font-weight:700;color:var(--muted)">Son anónimos · un solo voto · no podés votar el tuyo</div>
-            <div data-el="mmVoteCount" style="margin-top:6px;padding:6px 14px;border-radius:999px;background:#fff;border:2px solid var(--line);font-size:14px;font-weight:800">0 / 0 votaron</div>
+        ${header(s, cfg.reactTime)}
+        <div style="flex:1;width:100%;max-width:${isPlayer?'560px':'900px'};margin:0 auto;padding:16px 20px 24px;display:flex;flex-direction:column;gap:14px">
+          <div style="display:flex;align-items:center;justify-content:center;gap:10px">
+            <span style="font-size:12px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)">Meme ${g.showIndex+1} de ${entries.length}</span>
+            <div style="display:flex;gap:5px">${dots}</div>
           </div>
-          <div class="mm-grid${isPlayer?'':' mm-grid-big'}">${cards}</div>
-          <div class="sticky-bottom" style="margin-top:8px"><div data-el="mmVoteBar" style="width:100%;max-width:520px;margin:0 auto"></div></div>
+          <div style="animation:mmSlideIn .5s cubic-bezier(.3,1.4,.5,1) both" data-key="${cur.mid}">${memeHtml(cur.tpl, cur.top, cur.bottom, { maxVh: isPlayer ? 50 : 62 })}</div>
+          <div data-el="mmReactCount" style="align-self:center;padding:6px 14px;border-radius:999px;background:#fff;border:2px solid var(--line);font-size:14px;font-weight:800">0 / 0 reaccionaron</div>
+          ${controls}
         </div>
       </div>`;
     },
 
     viewMmResults(){
       const s = this.state, g = s.g, r = g.round, cfg = s.gameConfig, L = this.mmL();
-      const res = g.results[r] || { entries:[], votes:{} };
-      const tplId = g.templateId[r];
-      const rows = res.entries; // sorted by votes desc
+      const res = g.results[r] || { entries:[], reactions:{} };
+      const rows = res.entries; // sorted by score desc
       const n = rows.length;
       const step = L.revealRound===r ? L.revealStep : n;
       const done = step >= n;
       const isLast = r+1 >= cfg.rounds;
-      // reveal goes from last place up to the winner
-      const shownFrom = n - step;
+      const shownFrom = n - step; // reveal goes from last place up to the winner
       const winners = rows.filter(e=>e.place===1);
       const mine = rows.find(e=>e.pid===this.myId);
       const isPlayer = (g.participants[r]||[]).includes(this.myId);
-      const placeTxt = e=> e.place ? `${e.place}º puesto` : 'Sin votos';
+      const placeTxt = e=> e.place ? `${e.place}º puesto` : 'Sin puesto';
       const cardHtml = (e, i)=>{
         const p = this.playerById(e.pid) || { name:'Jugador desconectado', avatar:null };
         const revealed = i >= shownFrom;
@@ -774,11 +845,11 @@ export function installMakeItMeme(Game, ui){
         const justNow = i === shownFrom; // only the card revealed last animates
         return `<div class="${isWin?'mm-winner':''}" style="position:relative;display:flex;flex-direction:column;gap:10px">
           ${isWin?`<div class="mm-badge" style="background:${YEL};left:50%;transform:translateX(-50%);top:-14px;font-size:13px;animation:pop .5s cubic-bezier(.3,1.6,.5,1) both">👑 GANADOR${winners.length>1?' (EMPATE)':''}</div>`:''}
-          ${memeHtml(tplId, e.top, e.bottom)}
-          <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:18px;border:2px solid ${INK};background:${revealed?(e.pid===this.myId?'#FFEDE6':'#fff'):'var(--panel-line)'};min-height:58px;${revealed&&justNow?'animation:mmFlip .55s cubic-bezier(.3,1.4,.5,1) both':''}">
+          ${memeHtml(e.tpl, e.top, e.bottom)}
+          <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:18px;border:2px solid ${INK};background:${revealed?(e.pid===this.myId?'#FFEDE6':'#fff'):'var(--panel-line)'};min-height:62px;${revealed&&justNow?'animation:mmFlip .55s cubic-bezier(.3,1.4,.5,1) both':''}">
             ${revealed ? `
               <div style="width:34px;height:34px;flex:0 0 auto">${avatarSVG(p.avatar,34)}</div>
-              <div style="flex:1;min-width:0"><div style="font-weight:800;font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.name)}${e.pid===this.myId?' (vos)':''}</div><div style="font-size:12px;font-weight:700;color:var(--muted)">${e.votes} ${e.votes===1?'voto':'votos'} · ${placeTxt(e)}</div></div>
+              <div style="flex:1;min-width:0"><div style="display:flex;align-items:baseline;gap:6px;min-width:0"><span style="font-weight:800;font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.name)}${e.pid===this.myId?' (vos)':''}</span><span style="flex:0 0 auto;font-size:12px;font-weight:700;color:var(--muted)">${placeTxt(e)}</span></div><div style="display:flex;gap:10px;align-items:center;margin-top:3px">${rxChips(e.counts)}</div></div>
               <div style="padding:4px 10px;border-radius:999px;background:${e.points>0?MINT:'#fff'};border:2px solid ${INK};font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:15px">+${e.points}</div>`
             : `<div style="flex:1;text-align:center;font-weight:800;font-size:14px;color:var(--muted);letter-spacing:.08em">¿DE QUIÉN SERÁ?</div>`}
           </div>
@@ -787,15 +858,15 @@ export function installMakeItMeme(Game, ui){
       let personal = '';
       if(done && isPlayer){
         personal = mine
-          ? `<div style="display:flex;align-items:center;justify-content:center;gap:10px;flex-wrap:wrap;padding:12px 16px;border-radius:18px;background:${mine.place===1?YEL:'#fff'};border:2px solid ${INK};box-shadow:0 3px 0 ${INK};font-weight:800;font-size:15px;animation:rise .4s both">${mine.place===1?'¡Ganaste la ronda!':'Tu meme'} · ${mine.votes} ${mine.votes===1?'voto':'votos'} · ${placeTxt(mine)} · +${mine.points} pts</div>`
+          ? `<div style="display:flex;align-items:center;justify-content:center;gap:10px;flex-wrap:wrap;padding:12px 16px;border-radius:18px;background:${mine.place===1?YEL:'#fff'};border:2px solid ${INK};box-shadow:0 3px 0 ${INK};font-weight:800;font-size:15px;animation:rise .4s both">${mine.place===1?'¡Ganaste la ronda!':'Tu meme'} · ${rxChips(mine.counts)} · ${placeTxt(mine)} · +${mine.points} pts</div>`
           : `<div style="text-align:center;padding:12px 16px;border-radius:18px;background:#fff;border:2px solid var(--line);font-weight:800;font-size:14px;color:var(--muted)">Esta ronda no enviaste meme</div>`;
       }
       const confettiHtml = done && winners.length ? `<div style="position:fixed;inset:0;pointer-events:none;z-index:1;overflow:hidden">${this.confetti.slice(0,28).map(c=>`<div style="position:absolute;top:-20px;left:${c.left};width:${c.w};height:${c.h};border-radius:3px;background:${c.color};border:1.5px solid ${INK};animation:fall ${c.dur} linear ${c.delay} 2 both"></div>`).join('')}</div>` : '';
       let title, sub;
       if(!n){ title = 'NADIE MANDÓ MEME'; sub = 'Esta ronda no suma puntos. ¡Más rápido la próxima!'; }
       else if(!done){ title = 'RESULTADOS'; sub = 'Revelando autores…'; }
-      else if(!winners.length){ title = 'NADIE VOTÓ'; sub = 'Ningún meme recibió votos esta ronda.'; }
-      else { const wn = winners.map(e=>this.playerById(e.pid)?.name||'?'); title = winners.length>1 ? '¡EMPATE!' : esc(wn[0]).toUpperCase()+' GANA LA RONDA'; sub = winners.length>1 ? esc(wn.join(' y '))+' comparten el primer puesto' : `${winners[0].votes} ${winners[0].votes===1?'voto':'votos'}`; }
+      else if(!winners.length){ title = 'NADIE SE RIÓ'; sub = 'Ningún meme sumó puntos esta ronda.'; }
+      else { const wn = winners.map(e=>this.playerById(e.pid)?.name||'?'); title = winners.length>1 ? '¡EMPATE!' : esc(wn[0]).toUpperCase()+' GANA LA RONDA'; sub = winners.length>1 ? esc(wn.join(' y '))+' comparten el primer puesto' : `${winners[0].counts.lol} ${winners[0].counts.lol===1?'reacción':'reacciones'} 😂`; }
       const bottom = this.isHost
         ? (done ? `<button class="btn-primary" data-action="goRanking">VER CLASIFICACIÓN</button>` : `<button class="btn-secondary" data-action="mmRevealAll">MOSTRAR TODO</button>`)
         : (done ? waitHost(s, this) : '');
@@ -882,17 +953,18 @@ export function installMakeItMeme(Game, ui){
       const name = id => byId[id]?.name || '?';
       const plural = (n,a,b)=> n+' '+(n===1?a:b);
       const statDefs = {
-        best:          x=>({ label:'Meme más votado', value:name(x.pid), sub:plural(x.n,'voto','votos')+' · ronda '+(x.extra.round+1), bg:INK, dark:true, meme:x.extra }),
-        wins:          x=>({ label:'Más rondas ganadas', value:name(x.pid), sub:plural(x.n,'ronda','rondas'), bg:YEL }),
-        unanimous:     x=>({ label:'Victoria unánime', value:name(x.pid), sub:'Se llevó los '+x.n+' votos en la ronda '+(x.round+1), bg:PINK }),
-        eye:           x=>({ label:'Buen ojo', value:name(x.pid), sub:'Votó al ganador '+plural(x.n,'vez','veces'), bg:MINT }),
-        fast:          x=>({ label:'El más rápido', value:name(x.pid), sub:'Enviaba en ≈ '+x.n+' s', bg:BLUE }),
-        misunderstood: x=>({ label:'Incomprendido/a', value:name(x.pid), sub:plural(x.n,'meme','memes')+' sin votos', bg:VIOLET }),
+        best:      x=>({ label:'Meme más gracioso', value:name(x.pid), sub:plural(x.n,'reacción 😂','reacciones 😂')+' · ronda '+(x.extra.round+1), bg:INK, dark:true, meme:x.extra }),
+        wins:      x=>({ label:'Más rondas ganadas', value:name(x.pid), sub:plural(x.n,'ronda','rondas'), bg:YEL }),
+        unanimous: x=>({ label:'Risa unánime', value:name(x.pid), sub:'Los '+x.n+' le dieron 😂 en la ronda '+(x.round+1), bg:PINK }),
+        easy:      x=>({ label:'Risa fácil', value:name(x.pid), sub:'Repartió '+x.n+' 😂', bg:MINT }),
+        critic:    x=>({ label:'Crítico implacable', value:name(x.pid), sub:'Repartió '+x.n+' 🤮', bg:'#F6BE9E' }),
+        fast:      x=>({ label:'El más rápido', value:name(x.pid), sub:'Enviaba en ≈ '+x.n+' s', bg:BLUE }),
+        vomit:     x=>({ label:'Más 🤮 recibidos', value:name(x.pid), sub:plural(x.n,'vómito','vómitos'), bg:VIOLET }),
       };
       const stats = mmFinalStats(g, pl.map(p=>p.id)).map(x=>statDefs[x.key](x));
       const statsHtml = stats.map((x,i)=>`<div style="background:${x.bg};color:${x.dark?'var(--cream)':INK};border:2px solid ${INK};border-radius:22px;box-shadow:0 4px 0 ${INK};padding:16px;display:flex;flex-direction:column;gap:8px;animation:rise .5s both;animation-delay:${(0.5+i*0.1).toFixed(2)}s">
         <div style="font-size:12px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;opacity:${x.dark?0.8:1}">${esc(x.label)}</div>
-        ${x.meme?`<div style="max-width:220px">${memeHtml(x.meme.templateId, x.meme.top, x.meme.bottom)}</div>`:''}
+        ${x.meme?`<div style="max-width:220px">${memeHtml(x.meme.tpl, x.meme.top, x.meme.bottom)}</div>`:''}
         <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:24px;line-height:1.05;overflow-wrap:anywhere">${esc(x.value)}</div>
         <div style="font-size:14px;font-weight:700">${esc(x.sub)}</div>
       </div>`).join('');
@@ -901,7 +973,7 @@ export function installMakeItMeme(Game, ui){
         if(!res) return '';
         const win = res.entries.find(e=>e.place===1); if(!win) return '';
         return `<div style="display:flex;flex-direction:column;gap:6px;animation:rise .5s both;animation-delay:${(0.8+r*0.08).toFixed(2)}s">
-          ${memeHtml(g.templateId[r], win.top, win.bottom)}
+          ${memeHtml(win.tpl, win.top, win.bottom)}
           <div style="font-size:13px;font-weight:800;text-align:center">Ronda ${r+1} · ${esc(name(win.pid))}</div>
         </div>`;
       }).join('');

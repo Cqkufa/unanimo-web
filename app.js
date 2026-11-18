@@ -168,7 +168,7 @@ function gameEstimateMinutes(gameId){
   if(gameId==='dibujalo') return Math.max(1,Math.round(6*(60+10+15)/60));
   if(gameId==='tuttifrutti') return Math.max(1,Math.round(5*(60+40)/60));
   if(gameId==='impostor') return Math.max(1,Math.round(5*(6*30+60+20+30)/60));
-  if(gameId==='makeitmeme') return Math.max(1,Math.round(5*(60+30+25)/60));
+  if(gameId==='makeitmeme') return Math.max(1,Math.round(5*(60+5*7+25)/60));
   if(gameId==='ronda') return 12;
   return 5;
 }
@@ -390,8 +390,10 @@ class Game {
     // (like Dibujalo's word options) so it never sits in the shared,
     // broadcast-to-everyone game state.
     this.channel.on('broadcast', {event:'impWord'}, ({payload})=>{ if(payload.to===this.myId) this.impReceiveWord(payload); });
-    // Make It Meme: during voting, memes are anonymous — each author is told
-    // privately which entry is theirs (so their own can be greyed out).
+    // Make It Meme: each player's template is delivered privately, and while
+    // voting memes are anonymous — each author is told privately which one
+    // is theirs (so they can't react to it).
+    this.channel.on('broadcast', {event:'mmTpl'}, ({payload})=>{ if(payload.to===this.myId) this.mmReceiveTpl(payload); });
     this.channel.on('broadcast', {event:'mmOwn'}, ({payload})=>{ if(payload.to===this.myId) this.mmReceiveOwn(payload); });
     await new Promise(resolve=>{
       this.channel.subscribe(status=>{ if(status==='SUBSCRIBED') resolve(); });
@@ -584,7 +586,7 @@ class Game {
       if(this.state.gameId!=='impostor' || !this.state.g) return;
       this.impSubmitGuess(msg.id, msg.text);
     }
-    else if(msg.type === 'mmSubmit' || msg.type === 'mmDraft' || msg.type === 'mmVote' || msg.type === 'mmSync'){
+    else if(msg.type === 'mmSubmit' || msg.type === 'mmDraft' || msg.type === 'mmReact' || msg.type === 'mmSync'){
       if(this.state.gameId!=='makeitmeme' || !this.state.g) return;
       this.mmOnAction(msg);
     }
@@ -2119,7 +2121,7 @@ class Game {
     else if(gameId==='dibujalo') items = [cfg.rounds+(cfg.rounds===1?' ronda':' rondas'), cfg.chooseTime+'s para elegir', cfg.drawTime+'s para dibujar'];
     else if(gameId==='tuttifrutti') items = [cfg.rounds+(cfg.rounds===1?' ronda':' rondas'), cfg.categories.length+' categorías', cfg.time+'s por ronda'];
     else if(gameId==='impostor') items = [cfg.rounds+(cfg.rounds===1?' ronda':' rondas'), (cfg.impostorCount==='auto'?'Infiltrados automático':cfg.impostorCount+(cfg.impostorCount===1?' infiltrado':' infiltrados')), cfg.mode==='pure'?'Modo puro':'Modo clásico'];
-    else if(gameId==='makeitmeme') items = [cfg.rounds+(cfg.rounds===1?' ronda':' rondas'), cfg.writeTime+'s para crear', cfg.voteTime+'s para votar', ...(cfg.hostScreen?['Pantalla principal']:[])];
+    else if(gameId==='makeitmeme') items = [cfg.rounds+(cfg.rounds===1?' ronda':' rondas'), cfg.writeTime+'s para crear', cfg.reactTime+'s por meme', ...(cfg.hostScreen?['Pantalla principal']:[])];
     return items.map(t=>`<div style="padding:8px 14px;border-radius:999px;background:#fff;border:2px solid var(--line);font-size:14px;font-weight:700">${esc(t)}</div>`).join('');
   }
 
