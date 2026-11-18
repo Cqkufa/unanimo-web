@@ -215,9 +215,10 @@ a:hover{color:var(--coral)}
 
 /* Home decorative bubbles: anchored to the hero, never over the logo */
 .home-bubble{position:absolute;pointer-events:none}
-.home-bubble-l{top:18px;left:max(16px, calc(50% - 520px))}
-.home-bubble-r{top:62px;right:max(76px, calc(50% - 520px))}
-@media (max-width:600px){ .home-bubble-r{display:none} .home-bubble-l{top:14px;left:14px} }
+/* phones: only the two top bubbles (the rest would sit behind the cards) */
+@media (max-width:860px){ .home-bubble-t{display:none} }
+@media (max-width:1439px){ .home-bubble-g{display:none} }
+html,body{overflow-x:clip}
 
 /* Floating HUD (sound + chat) */
 .hud-sound{position:fixed;top:14px;right:16px;z-index:70}

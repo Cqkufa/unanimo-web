@@ -69,6 +69,8 @@ const GAMES = [
 // same {id,name,tagline,letters,colors,min,max} shape for its lobby meta
 // card, so it's listed here too and just filtered out of the "pick one
 // game" grids.
+// Modo Ronda is hidden for now (too chaotic); flip to true to bring it back.
+const RONDA_ENABLED = false;
 const RONDA_META = {id:'ronda', name:'Modo Ronda', tagline:'Una partida. Varios juegos. Un solo ganador.', letters:['M','R'], colors:[YEL,MINT], min:2, max:12, isNew:true};
 function gameMeta(id){ return id==='ronda' ? RONDA_META : GAMES.find(g=>g.id===id); }
 // Central registry of which games Modo Ronda can chain together, and the
@@ -1895,25 +1897,34 @@ class Game {
     const letters = ['R','O','N','D','A'];
     const colors = [CORAL,VIOLET,YEL,MINT,BLUE];
     const rots = [-6,4,-4,5,-3];
-    const gameCards = GAMES.map((g,i)=>this.gameCardHtml(g, 'pickGameFromHome', (0.15+i*0.08).toFixed(2)+'s')).join('');
-    return `<div class="screen screen-wide" style="position:relative;overflow:hidden">
-      <div style="position:absolute;inset:0;pointer-events:none;z-index:0">
-        <div class="home-bubble home-bubble-l" style="animation:float 5s ease-in-out infinite"><div style="padding:9px 16px;border-radius:18px 18px 18px 4px;background:${CORAL};border:2px solid ${INK};font-weight:800;font-size:16px;transform:rotate(-8deg)">Che</div></div>
-        <div class="home-bubble home-bubble-r" style="animation:float 6s ease-in-out .8s infinite"><div style="padding:9px 16px;border-radius:18px 18px 4px 18px;background:#fff;border:2px solid ${INK};font-weight:800;font-size:16px;transform:rotate(6deg)">Dale</div></div>
-      </div>
+    const gameCards = GAMES.map((g,i)=>this.gameCardHtml(g, 'pickGameFromHome', (0.25+i*0.07).toFixed(2)+'s')).join('');
+    // Decorative chat bubbles scattered behind the page. [text, bg, top, side, offset, rot, tail, mobile?]
+    // Decorative chat bubbles. [text, bg, top, side, offset, rot, tier]
+    // tier 'm' = always, 't' = top area (tablet+), 'g' = side gutters (wide screens only, never behind cards)
+    const G = 'calc(100% + 28px)'; // just outside the content column
+    const BUBBLES = [
+      ['Che', CORAL, '18px', 'l', '3%', -8, 'm'],
+      ['Dale', '#fff', '62px', 'r', '7%', 6, 't'],
+      ['¿Jugamos?', YEL, '150px', 'l', '1%', 5, 't'],
+      ['JAJAJAJA', MINT, '190px', 'r', '0%', -6, 't'],
+      ['Me toca 🙋', '#fff', '470px', 'l', G, -4, 'g'],
+      ['Ni en pedo', VIOLET, '590px', 'r', G, 7, 'g'],
+      ['😂😂😂', '#fff', '720px', 'l', G, 6, 'g'],
+      ['Va la revancha', PINK, '830px', 'r', G, -5, 'g'],
+      ['¡Uno más!', BLUE, '960px', 'l', G, -7, 'g'],
+      ['Ganaste vos 🙄', '#fff', '1060px', 'r', G, 4, 'g'],
+    ];
+    const bubbles = BUBBLES.map(([t,bg,top,side,off,rot,tier],i)=>`<div class="home-bubble home-bubble-${tier}" style="top:${top};${tier==='g'?(side==='l'?'right':'left'):(side==='l'?'left':'right')}:${off};animation:float ${5+(i%3)}s ease-in-out ${(i*0.35).toFixed(2)}s infinite"><div style="padding:9px 16px;border-radius:${side==='l'?'18px 18px 18px 4px':'18px 18px 4px 18px'};background:${bg};border:2px solid ${INK};box-shadow:0 3px 0 ${INK};font-weight:800;font-size:16px;white-space:nowrap;transform:rotate(${rot}deg)">${t}</div></div>`).join('');
+    return `<div class="screen screen-wide home-screen" style="position:relative">
+      <div style="position:absolute;inset:0;pointer-events:none;z-index:0">${bubbles}</div>
       <div style="position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;gap:14px;padding-top:clamp(44px,9vh,84px)">
         <div style="display:flex;gap:clamp(4px,1.2vw,8px)">
           ${letters.map((ch,i)=>`<div style="animation:drop .6s cubic-bezier(.3,1.5,.5,1) ${(i*0.06).toFixed(2)}s both"><div style="width:clamp(46px,13vw,76px);height:clamp(56px,15.5vw,90px);border-radius:14px;background:${colors[i]};border:2.5px solid ${INK};box-shadow:0 5px 0 ${INK};display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:clamp(30px,9vw,54px);transform:rotate(${rots[i]}deg)">${ch}</div></div>`).join('')}
         </div>
         <div class="heading" style="font-size:clamp(20px,5.5vw,26px);text-align:center;animation:rise .5s .4s both">Party games para jugar con amigos.</div>
       </div>
-      <div style="position:relative;z-index:1;display:flex;flex-direction:column;gap:14px;padding-top:30px">
-        <div class="section-label">Juego individual</div>
-        <div class="game-grid">${gameCards}</div>
-      </div>
-      <div style="position:relative;z-index:1;padding-top:6px">${this.rondaCardHtml('pickGameFromHome','0.5s')}</div>
-      <div style="position:relative;z-index:1;width:100%;max-width:560px;margin:0 auto;display:flex;flex-direction:column;gap:14px;padding-top:22px;padding-bottom:24px">
-        <div style="display:flex;flex-direction:column;gap:8px;padding:14px;border-radius:20px;background:#fff;border:2px solid var(--line)">
+      <div style="position:relative;z-index:1;width:100%;max-width:560px;margin:0 auto;padding-top:26px;animation:rise .5s .45s both">
+        <div style="display:flex;flex-direction:column;gap:8px;padding:14px;border-radius:20px;background:#fff;border:2px solid ${INK};box-shadow:0 4px 0 ${INK}">
           <div style="font-size:14px;font-weight:700;color:var(--muted);padding-left:4px">¿Te pasaron un código?</div>
           <div style="display:flex;gap:10px">
             <input data-role="join-code" value="${esc(this.local.joinCode)}" placeholder="A7K9P" autocomplete="off"
@@ -1923,6 +1934,13 @@ class Game {
           ${this.local.joining?`<div style="display:flex;align-items:center;gap:8px;padding-top:4px"><div class="spinner"></div><span style="font-size:14px;font-weight:700;color:var(--muted)">Conectando…</span></div>`:''}
           ${this.local.joinError?`<div style="font-size:13px;font-weight:700;color:#B3341A">${esc(this.local.joinError)}</div>`:''}
         </div>
+      </div>
+      <div style="position:relative;z-index:1;display:flex;flex-direction:column;gap:14px;padding-top:30px">
+        <div class="section-label">O creá una sala y elegí a qué jugar</div>
+        <div class="game-grid">${gameCards}</div>
+      </div>
+      ${RONDA_ENABLED?`<div style="position:relative;z-index:1;padding-top:6px">${this.rondaCardHtml('pickGameFromHome','0.5s')}</div>`:''}
+      <div style="position:relative;z-index:1;width:100%;max-width:560px;margin:0 auto;padding-top:22px;padding-bottom:24px">
         <button class="btn-secondary" data-action="openHow">CÓMO JUGAR</button>
       </div>
     </div>`;
@@ -2093,7 +2111,7 @@ class Game {
     return `<div style="display:flex;flex-direction:column;gap:14px;padding-top:8px">
       <div class="section-label">¿A qué jugamos?</div>
       <div class="game-grid">${cards}</div>
-      <div>${this.rondaCardHtml('pickGame','0.3s')}</div>
+      ${RONDA_ENABLED?`<div>${this.rondaCardHtml('pickGame','0.3s')}</div>`:''}
     </div>`;
   }
   // Distinct/starred card for Modo Ronda — deliberately different from the
