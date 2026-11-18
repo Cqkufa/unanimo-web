@@ -1096,15 +1096,6 @@ export function installMakeItMeme(Game, ui){
         <div class="one-line" style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:24px;line-height:1.1">${esc(x.value)}</div>
         <div style="font-size:14px;font-weight:700">${esc(x.sub)}</div>
       </div>`).join('');
-      // hall of fame: every round's winning meme
-      const hall = (g.results||[]).map((res,r)=>{
-        if(!res) return '';
-        const win = res.entries.find(e=>e.place===1); if(!win) return '';
-        return `<div style="display:flex;flex-direction:column;gap:8px;animation:rise .5s both;animation-delay:${(0.6+r*0.08).toFixed(2)}s">
-          ${memeHtml(win.tpl, win.top, win.bottom, { square:true })}
-          <div style="display:flex;justify-content:space-between;gap:8px;font-size:13px;font-weight:800"><span class="one-line">${esc(name(win.pid))}</span><span style="color:var(--muted);flex:0 0 auto">Ronda ${r+1}</span></div>
-        </div>`;
-      }).join('');
       const confettiHtml = this.confetti.map(c=>`<div style="position:absolute;top:-20px;left:${c.left};width:${c.w};height:${c.h};border-radius:3px;background:${c.color};border:1.5px solid ${INK};animation:fall ${c.dur} linear ${c.delay} 2 both"></div>`).join('');
       const bottom = this.isHost
         ? `<button class="btn-primary final-btn" data-action="playAgain">JUGAR DE NUEVO</button><button class="btn-secondary final-btn" data-action="backToPortal">ELEGIR OTRO JUEGO</button>`
@@ -1128,10 +1119,6 @@ export function installMakeItMeme(Game, ui){
               <div class="mm-stats">${statsHtml}</div>
             </div>`:''}
           </div>
-          ${hall?`<div style="display:flex;flex-direction:column;gap:12px">
-            <div class="section-label" style="text-align:left">Los memes ganadores</div>
-            <div class="mm-hall">${hall}</div>
-          </div>`:''}
           <div class="sticky-bottom">
             <div class="final-actions">${bottom}</div>
           </div>
