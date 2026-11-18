@@ -1862,21 +1862,20 @@ class Game {
   avatarPickerInner(compact){
     const av = normalizeAvatar(this.local.avatar);
     const previewSize = compact ? 84 : 104;
+    const chev = d => `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="${INK}" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="${d}"></path></svg>`;
+    const left = chev('M15 5l-7 7 7 7'), right = chev('M9 5l7 7-7 7');
     const rows = AVATAR_TRAITS.map(t=>`<div class="av-row">
         <div class="av-row-label">${t.label}</div>
         <div class="av-row-ctl">
-          <button class="av-arrow" data-action="avatarPrev" data-trait="${t.key}" data-count="${t.count}" aria-label="${t.label} anterior">◀</button>
+          <button class="av-arrow" data-action="avatarPrev" data-trait="${t.key}" data-count="${t.count}" aria-label="${t.label} anterior">${left}</button>
           <div class="av-row-value">${esc(t.names[av[t.key]])}</div>
-          <button class="av-arrow" data-action="avatarNext" data-trait="${t.key}" data-count="${t.count}" aria-label="${t.label} siguiente">▶</button>
+          <button class="av-arrow" data-action="avatarNext" data-trait="${t.key}" data-count="${t.count}" aria-label="${t.label} siguiente">${right}</button>
         </div>
       </div>`).join('');
     return `<div class="av-picker">
-      <div class="av-preview">
-        <div style="width:${previewSize}px;height:${previewSize}px">${avatarSVG(av, previewSize)}</div>
-        <div class="av-preview-side">
-          <div class="av-kicker">Armá tu personaje</div>
-          <button class="av-dice" data-action="avatarRandom">🎲 Al azar</button>
-        </div>
+      <div class="av-preview av-preview-center">
+        <div style="width:${previewSize}px;height:${previewSize}px;margin-top:${compact?14:18}px">${avatarSVG(av, previewSize)}</div>
+        <button class="av-dice" data-action="avatarRandom">🎲 Al azar</button>
       </div>
       <div class="av-rows">${rows}</div>
     </div>`;
